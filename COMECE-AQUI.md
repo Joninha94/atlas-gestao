@@ -10,6 +10,10 @@ Baixe em <https://www.docker.com/products/docker-desktop/>, instale e abra. Espe
 
 ## 2. Suba o sistema
 
+**No Mac, o jeito mais fácil:** descompacte o zip e dê dois cliques em **`Iniciar Produtiva.command`**. Na primeira vez o Mac pode bloquear: clique com o **botão direito → Abrir → Abrir**. Para desligar: **`Parar Produtiva.command`**. Se der problema: **`Diagnostico Produtiva.command`**.
+
+Ou, pelo Terminal:
+
 Descompacte o `produtiva-gestao.zip` (dois cliques nele). Abra o **Terminal**, digite `cd ` (com espaço),
 **arraste a pasta `produtiva-gestao` para dentro do Terminal**, aperte Enter e depois:
 

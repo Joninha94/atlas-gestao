@@ -25,12 +25,19 @@ for porta in 3000 3333 8081; do
   fi
 done
 
-# Segredos gerados uma vez, só nesta máquina
+# Segredos gerados uma vez por computador e guardados também em ~/.produtiva
+# (assim uma pasta nova/atualizada continua lendo os mesmos dados)
+mkdir -p "$HOME/.produtiva"
+if [ ! -f .env.local-docker ] && [ -f "$HOME/.produtiva/env-local-docker" ]; then
+  cp "$HOME/.produtiva/env-local-docker" .env.local-docker
+fi
 if [ ! -f .env.local-docker ]; then
   rnd() { LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c "$1"; }
   printf 'JWT_SECRET=%s\nVAULT_MASTER_KEY=%s\nSEED_ADMIN_PASSWORD=Produtiva@2026\n' "$(rnd 64)" "$(rnd 64)" > .env.local-docker
-  echo "🔐 Segredos locais criados em .env.local-docker"
+  echo "🔐 Segredos locais criados"
 fi
+[ -f "$HOME/.produtiva/env-local-docker" ] || cp .env.local-docker "$HOME/.produtiva/env-local-docker"
+chmod 600 .env.local-docker "$HOME/.produtiva/env-local-docker" 2>/dev/null || true
 
 echo "🏗️  Construindo e subindo (a primeira vez leva de 5 a 15 minutos — não feche o Terminal)..."
 $C up -d --build || falhou "O Docker não conseguiu construir ou subir os serviços (veja as mensagens acima)."
@@ -50,9 +57,9 @@ espera http://localhost:3333/health "a API" 200 || falhou "A API não respondeu 
 espera http://localhost:3000/login "o painel" 60 || falhou "O painel (porta 3000) não respondeu."
 espera http://localhost:8081/ "o app do cliente" 40 || echo "⚠️  O app do cliente (8081) ainda não respondeu; o painel já pode ser usado."
 
-if [ "${1:-}" = "--demo" ]; then
-  echo "🧪 Carregando base de demonstração..."
-  $C --profile demo run --rm demo || echo "⚠️  Demonstração falhou (o sistema continua funcionando)."
+if [ "${1:-}" = "--demo" ] && [ ! -f .demo-carregada ]; then
+  echo "🧪 Carregando base de demonstração (só na primeira vez)..."
+  if $C --profile demo run --rm demo; then touch .demo-carregada; else echo "⚠️  Demonstração falhou (o sistema continua funcionando)."; fi
 fi
 
 cat <<MSG

@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ReactNode, useEffect, useState } from 'react';
 import { Bell, Building2, FileText, FolderOpen, Gauge, ListChecks, LogOut, MessagesSquare, Radar, Settings } from 'lucide-react';
 import { io } from 'socket.io-client';
-import { API_URL, apiPost, getSession, setSession } from '../lib/api';
+import { API_URL, api, apiPost, getSession, setSession } from '../lib/api';
 import { useApi, toast } from '../lib/hooks';
 import { dateTime } from '../lib/format';
 import { Toaster } from './ui';
@@ -27,6 +27,16 @@ export function Shell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState<{ name: string; tenant?: string } | null>(null);
+  const [brand, setBrand] = useState<{ name: string; logoUrl: string | null } | null>(null);
+
+  // Logo e nome do escritório (atualiza na hora quando trocados em Configurações)
+  useEffect(() => {
+    if (path === '/login' || !getSession()) return;
+    const load = () => api<{ name: string; logoUrl: string | null }>('/settings/branding').then(setBrand).catch(() => undefined);
+    load();
+    window.addEventListener('produtiva:branding', load);
+    return () => window.removeEventListener('produtiva:branding', load);
+  }, [path === '/login']);
 
   useEffect(() => {
     if (path === '/login') return setReady(true);
@@ -45,13 +55,20 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen">
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
-        <div className="flex items-center gap-2 px-5 py-5">
-          <div className="grid h-8 w-8 place-items-center rounded-md bg-brand-700 text-sm font-bold text-white">P</div>
-          <div>
-            <div className="text-sm font-semibold leading-tight">Produtiva Gestão</div>
-            <div className="text-[11px] text-ink-muted">{user?.tenant ?? 'Escritório'}</div>
+        {brand?.logoUrl ? (
+          <div className="px-5 py-4">
+            <img src={brand.logoUrl} alt={brand.name} className="max-h-12 max-w-[190px] object-contain" />
+            <div className="mt-1 text-[11px] text-ink-muted">Produtiva Gestão</div>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-center gap-2 px-5 py-5">
+            <div className="grid h-8 w-8 place-items-center rounded-md bg-brand-700 text-sm font-bold text-white">P</div>
+            <div>
+              <div className="text-sm font-semibold leading-tight">Produtiva Gestão</div>
+              <div className="text-[11px] text-ink-muted">{brand?.name ?? user?.tenant ?? 'Escritório'}</div>
+            </div>
+          </div>
+        )}
         <nav className="flex-1 space-y-0.5 px-3">
           {NAV.map(({ href, label, icon: Icon }) => {
             const active = href === '/' ? path === '/' : path.startsWith(href);

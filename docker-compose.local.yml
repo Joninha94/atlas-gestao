@@ -6,6 +6,9 @@
 #
 # Painel do escritório: http://localhost:3000   ·   App do cliente: http://localhost:8081
 # =============================================================================
+# Nome fixo: os dados (volumes) continuam os mesmos mesmo se a pasta mudar de nome/lugar
+name: produtiva-gestao
+
 x-env: &env
   env_file: .env.local-docker
   environment: &envvars

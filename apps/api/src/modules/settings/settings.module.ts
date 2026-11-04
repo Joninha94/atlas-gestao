@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Module, Param, Post, Put, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Module, Param, Post, Put, Query } from '@nestjs/common';
 import { z } from 'zod';
 import { AuthUser, CurrentUser, PERMISSIONS, Public, RequirePermission } from '../../common/auth';
 import { PrismaService, SystemPrismaService } from '../../common/prisma.service';
@@ -7,6 +7,7 @@ import { MailerService } from '../../integrations/mail/mailer.service';
 import { NotificationsService } from '../../integrations/notifications.service';
 import { StorageService } from '../../integrations/storage/storage.service';
 import { isSandbox, readOutbox } from '../../integrations/sandbox';
+import { imageKind } from '../../integrations/pdf.util';
 import { sandboxRegisterPayment } from '../../integrations/serpro/serpro.sandbox';
 import { AiGatewayService } from '../../integrations/ai/ai-gateway.service';
 import { ClientsModule, ClientsService } from '../clients/clients.module';
@@ -74,11 +75,35 @@ export class SettingsController {
     });
   }
 
+  /** Logo do escritório: PNG ou JPG até 2 MB (aparece no painel, no app do cliente e nos PDFs). */
   @Post('settings/logo')
   @RequirePermission(PERMISSIONS.SETTINGS)
-  logo(@CurrentUser() u: AuthUser, @Body() b: { fileKey: string }) {
-    if (!b.fileKey.startsWith(`${u.tenantId}/`)) throw new ForbiddenException();
-    return this.prisma.tenant.update({ where: { id: u.tenantId }, data: { logoKey: b.fileKey }, select: { id: true } });
+  async logo(@CurrentUser() u: AuthUser, @Body() b: { fileKey: string }) {
+    if (!b?.fileKey || !b.fileKey.startsWith(`${u.tenantId}/`)) throw new ForbiddenException();
+    const bytes = await this.storage.get(b.fileKey);
+    if (bytes.length > 2 * 1024 * 1024) throw new BadRequestException('A logo deve ter no máximo 2 MB.');
+    if (!imageKind(bytes)) throw new BadRequestException('Envie a logo em PNG ou JPG.');
+    const t = await this.prisma.tenant.findUniqueOrThrow({ where: { id: u.tenantId }, select: { logoKey: true } });
+    await this.prisma.tenant.update({ where: { id: u.tenantId }, data: { logoKey: b.fileKey } });
+    if (t.logoKey && t.logoKey !== b.fileKey) await this.storage.remove(t.logoKey).catch(() => undefined);
+    await this.prisma.auditLog.create({ data: { tenantId: u.tenantId, userId: u.sub, action: 'escritorio.logo', entity: 'Tenant', entityId: u.tenantId } });
+    return { logoUrl: await this.storage.signedUrl(b.fileKey, 3600) };
+  }
+
+  @Delete('settings/logo')
+  @RequirePermission(PERMISSIONS.SETTINGS)
+  async removeLogo(@CurrentUser() u: AuthUser) {
+    const t = await this.prisma.tenant.findUniqueOrThrow({ where: { id: u.tenantId }, select: { logoKey: true } });
+    await this.prisma.tenant.update({ where: { id: u.tenantId }, data: { logoKey: null } });
+    if (t.logoKey) await this.storage.remove(t.logoKey).catch(() => undefined);
+    return { ok: true };
+  }
+
+  /** Nome e logo do escritório para o menu do painel (qualquer usuário logado). */
+  @Get('settings/branding')
+  async branding(@CurrentUser() u: AuthUser) {
+    const t = await this.prisma.tenant.findUniqueOrThrow({ where: { id: u.tenantId }, select: { name: true, logoKey: true } });
+    return { name: t.name, logoUrl: t.logoKey ? await this.storage.signedUrl(t.logoKey, 3600) : null };
   }
 
   @Post('settings/test-email')
@@ -194,6 +219,20 @@ const prevMonth = (m: string, back: number) => {
   return d.toISOString().slice(0, 7);
 };
 
+/** Identidade visual pública do escritório (tela de login do app do cliente). Só nome e logo. */
+@Controller('public')
+export class PublicBrandingController {
+  constructor(private readonly sys: SystemPrismaService, private readonly storage: StorageService) {}
+
+  @Public()
+  @Get('branding/:cnpj')
+  async branding(@Param('cnpj') cnpj: string) {
+    const t = await this.sys.tenant.findUnique({ where: { cnpj: cnpj.replace(/\D/g, '') }, select: { name: true, logoKey: true } });
+    if (!t) return { name: null, logoUrl: null };
+    return { name: t.name, logoUrl: t.logoKey ? await this.storage.signedUrl(t.logoKey, 3600) : null };
+  }
+}
+
 /**
  * Ferramentas de desenvolvimento (só com INTEGRATIONS_MODE=sandbox):
  * caixa de saída de e-mails/WhatsApp/push simulados e pagamento simulado de guia.
@@ -226,6 +265,6 @@ export class DevController {
 
 @Module({
   imports: [ClientsModule, MonitorModule],
-  controllers: [SettingsController, DevController],
+  controllers: [SettingsController, DevController, PublicBrandingController],
 })
 export class SettingsModule {}

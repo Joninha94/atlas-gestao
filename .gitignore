@@ -10,3 +10,4 @@ apps/mobile/dist/
 /storage/
 .storage/
 .env.local-docker
+.demo-carregada

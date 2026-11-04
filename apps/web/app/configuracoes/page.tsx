@@ -52,9 +52,28 @@ function Escritorio() {
             <Field label="Nome do escritório"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
             <Field label="CNPJ"><input className="input" value={doc(data.cnpj)} disabled /></Field>
             <Field label="Plano"><input className="input" value={data.plan} disabled /></Field>
-            <Field label="Logo (aparece no app do cliente)">
-              <div className="flex items-center gap-3">{data.logoUrl && <img src={data.logoUrl} alt="" className="h-10 rounded border" />}<input type="file" accept="image/*" onChange={(e) => e.target.files && run(async () => { const [up] = await uploadFiles(e.target.files!, { withText: 'false' }); await apiPost('/settings/logo', { fileKey: up.fileKey }); reload(); }, 'Logo atualizada.')} /></div>
-            </Field>
+            <div>
+              <span className="label">Logo do escritório</span>
+              <div className="flex items-center gap-4 rounded-md border border-dashed border-slate-300 p-3">
+                <div className="grid h-16 w-32 place-items-center overflow-hidden rounded bg-slate-50">
+                  {data.logoUrl ? <img src={data.logoUrl} alt="Logo do escritório" className="max-h-16 max-w-32 object-contain" /> : <span className="text-xs text-ink-muted">sem logo</span>}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <label className={`inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-ink transition hover:bg-slate-50 ${busy ? 'pointer-events-none opacity-50' : ''}`}>
+                    {data.logoUrl ? 'Trocar logo' : 'Enviar logo'}
+                    <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (!file) return;
+                      if (file.size > 2 * 1024 * 1024) { run(async () => { throw new Error('A logo deve ter no máximo 2 MB.'); }); return; }
+                      run(async () => { const [up] = await uploadFiles([file], { withText: 'false' }); await apiPost('/settings/logo', { fileKey: up.fileKey }); reload(); window.dispatchEvent(new Event('produtiva:branding')); }, 'Logo atualizada.');
+                    }} />
+                  </label>
+                  {data.logoUrl && <Button variant="ghost" disabled={busy} onClick={() => run(async () => { await apiDelete('/settings/logo'); reload(); window.dispatchEvent(new Event('produtiva:branding')); }, 'Logo removida.')}>Remover</Button>}
+                </div>
+              </div>
+              <span className="mt-1 block text-xs text-ink-muted">PNG ou JPG, até 2 MB (de preferência com fundo transparente). Aparece no menu do painel, no app do cliente e nos PDFs (Checkup 360 e faturamento).</span>
+            </div>
             <div className="text-xs text-ink-muted">IA: {data.aiEnabled ? 'ligada' : 'desligada (configure ANTHROPIC_API_KEY no servidor; até lá usa regras simples)'}</div>
           </div>
         </Card>

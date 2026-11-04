@@ -21,6 +21,10 @@ const cnpj = () => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 token = (await call('POST', '/auth/login', { cnpj: OFFICE, email: process.env.ADMIN_EMAIL ?? 'admin@produtiva.local', password: process.env.ADMIN_PASSWORD ?? 'Produtiva@2026' })).accessToken;
+if ((await call('GET', '/clients')).some((c) => c.legalName === 'Padaria Pão Dourado Ltda')) {
+  console.log('Base de demonstração já carregada.');
+  process.exit(0);
+}
 const deps = Object.fromEntries((await call('GET', '/departments')).map((d) => [d.name, d.id]));
 const me = (await call('GET', '/auth/me')).sub;
 

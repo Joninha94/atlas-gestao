@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { Text, View } from 'react-native';
+import { Image, Text, View } from 'react-native';
 import { Badge, Button, C, Card, Empty, ErrorBox, Loading, Row, Screen, Stat, s } from '../../components/ui';
 import { getSession } from '../../lib/api';
 import { brl, comp, date, label } from '../../lib/format';
@@ -18,6 +18,7 @@ export default function Home() {
 
   return (
     <Screen onRefresh={reload} refreshing={loading}>
+      {data.escritorio.logoUrl && <Image source={{ uri: data.escritorio.logoUrl }} style={{ width: 150, height: 44, alignSelf: 'flex-start' }} resizeMode="contain" accessibilityLabel={data.escritorio.name} />}
       <View style={{ gap: 2 }}>
         <Text style={s.muted}>Olá, {user?.name?.split(' ')[0]}</Text>
         <Text style={s.h1}>{data.empresa.nome}</Text>

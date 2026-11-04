@@ -531,6 +531,24 @@ await step('obrigações por cliente: padrão do regime, ativar opcional cria a 
   assert.match(efd.deadline, /10º dia útil/);
 });
 
+await step('logo do escritório: recusa arquivo que não é imagem, aparece no painel, no app e no PDF', async () => {
+  // PNG 1x1 válido
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const [fake] = await upload([{ name: 'logo.png', buf: Buffer.from('não é imagem'), type: 'image/png' }], { withText: 'false' });
+  await assert.rejects(post('/settings/logo', { fileKey: fake.fileKey }), /400/);
+  const [ok] = await upload([{ name: 'logo.png', buf: png, type: 'image/png' }], { withText: 'false' });
+  const r = await post('/settings/logo', { fileKey: ok.fileKey });
+  assert.ok(r.logoUrl);
+  assert.ok((await get('/settings/branding')).logoUrl);
+  const pub = await call('GET', `/public/branding/${OFFICE}`, undefined, '');
+  assert.ok(pub.logoUrl && pub.name);
+  const pdf = await call('GET', `/clients/${ctx.clientId}/pdf/checkup`, undefined, token, true);
+  assert.equal(pdf.status, 200);
+  assert.ok(Buffer.from(await pdf.arrayBuffer()).includes('/Image'));
+  await call('DELETE', '/settings/logo', undefined, token);
+  assert.equal((await get('/settings/branding')).logoUrl, null);
+});
+
 await step('agente local: token, exportar agora, entrega na pasta de importação, revogação', async () => {
   const { spawnSync } = await import('node:child_process');
   const fs = await import('node:fs');

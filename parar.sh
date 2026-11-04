@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 if [ "${1:-}" = "--apagar" ]; then
   read -r -p "Apagar TODOS os dados locais da Produtiva Gestão? [s/N] " r
   [ "$r" = "s" ] || [ "$r" = "S" ] || exit 0
-  docker compose -f docker-compose.local.yml --profile demo down -v
+  docker compose -f docker-compose.local.yml --profile demo down -v && rm -f .demo-carregada
 else
   docker compose -f docker-compose.local.yml --profile demo down
 fi

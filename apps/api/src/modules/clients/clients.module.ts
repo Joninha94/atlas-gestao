@@ -13,6 +13,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { VaultService } from '../../common/vault.service';
 import { ClientCreatedEvent, Events } from '../../common/events';
 import { CnpjService } from '../../integrations/cnpj/cnpj.service';
+import { StorageService } from '../../integrations/storage/storage.service';
 import { CertificatesService } from '../../integrations/certificates.service';
 import { IntegraContadorClient, SERPRO_SERVICES } from '../../integrations/serpro/integra-contador.client';
 import { simplePdf } from '../../integrations/pdf.util';
@@ -65,6 +66,7 @@ export class ClientsService {
     private readonly certs: CertificatesService,
     private readonly serpro: IntegraContadorClient,
     private readonly events: EventEmitter2,
+    private readonly storage: StorageService,
   ) {}
 
   /** Cadastro: com CNPJ, busca dados cadastrais, cartão CNPJ e QSA automaticamente. */
@@ -258,7 +260,8 @@ export class ClientsService {
       ];
     }
     const title = kind === 'faturamento' ? 'Relação de Faturamento' : 'Checkup 360';
-    const raw = await simplePdf(`${title} — ${tenant.name}`, lines, `Emitido em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Maceio' })} · assinado digitalmente por ${tenant.name}`);
+    const logo = tenant.logoKey ? await this.storage.get(tenant.logoKey).catch(() => null) : null;
+    const raw = await simplePdf(`${title} — ${tenant.name}`, lines, `Emitido em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Maceio' })} · assinado digitalmente por ${tenant.name}`, { logo });
 
     // Assinatura PAdES com o certificado A1 do escritório
     let cert: { pfx: Buffer; passphrase: string };
