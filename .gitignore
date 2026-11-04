@@ -7,5 +7,6 @@ dist/
 .env.local
 packages/db/src/generated/
 apps/mobile/dist/
-storage/
+/storage/
+.storage/
 .env.local-docker
