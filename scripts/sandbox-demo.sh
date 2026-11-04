@@ -16,7 +16,17 @@ if command -v apt-get >/dev/null; then
     sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql redis-server >/dev/null
   fi
-  sudo service postgresql start >/dev/null 2>&1 || sudo pg_ctlcluster "$(ls /usr/lib/postgresql | sort -n | tail -1)" main start
+  PGV=$(ls /usr/lib/postgresql | sort -n | tail -1); PGBIN=/usr/lib/postgresql/$PGV/bin
+  if ! sudo -u postgres psql -qtc "select 1" >/dev/null 2>&1; then
+    sudo service postgresql start >/dev/null 2>&1 || true
+  fi
+  if ! sudo -u postgres psql -qtc "select 1" >/dev/null 2>&1; then
+    # Sem cluster criado (containers sem pg_lsclusters): cria um na mão
+    D=/var/lib/postgresql/demo
+    if [ ! -f "$D/PG_VERSION" ]; then sudo mkdir -p "$D" && sudo chown postgres:postgres "$D" && sudo -u postgres "$PGBIN/initdb" -D "$D" --auth-local=trust --auth-host=md5 >/dev/null; fi
+    sudo mkdir -p /var/run/postgresql && sudo chown postgres:postgres /var/run/postgresql
+    sudo -u postgres "$PGBIN/pg_ctl" -D "$D" -l /tmp/pg.log -o "-c listen_addresses=localhost" start -w >/dev/null
+  fi
   redis-cli ping >/dev/null 2>&1 || redis-server --daemonize yes >/dev/null
 else
   # Amazon Linux / Fedora
