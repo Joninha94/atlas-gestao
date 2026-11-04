@@ -1,0 +1,16 @@
+{
+  "name": "produtiva-gestao",
+  "private": true,
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "db:migrate": "pnpm --filter @produtiva/db migrate",
+    "db:seed": "pnpm --filter @produtiva/db seed"
+  },
+  "devDependencies": {
+    "turbo": "^2.2.0"
+  }
+}

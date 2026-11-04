@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Produtiva",
+    "slug": "produtiva-cliente",
+    "scheme": "produtiva",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "splash": { "image": "./assets/icon.png", "resizeMode": "contain", "backgroundColor": "#0f4c47" },
+    "ios": { "bundleIdentifier": "br.com.produtivacontabilidade.app", "supportsTablet": true },
+    "android": {
+      "package": "br.com.produtivacontabilidade.app",
+      "adaptiveIcon": { "foregroundImage": "./assets/icon.png", "backgroundColor": "#0f4c47" }
+    },
+    "web": { "bundler": "metro", "output": "single", "favicon": "./assets/icon.png" },
+    "plugins": ["expo-router", "expo-secure-store", ["expo-notifications", { "color": "#1d7871" }]],
+    "experiments": { "typedRoutes": false },
+    "extra": {
+      "apiUrl": "http://localhost:3333",
+      "officeCnpj": "11444777000161",
+      "eas": { "projectId": "" }
+    }
+  }
+}

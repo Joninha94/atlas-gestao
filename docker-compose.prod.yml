@@ -1,0 +1,95 @@
+# Pilha completa em um servidor (VPS). Para nuvem gerenciada, use as mesmas imagens com
+# Postgres/Redis/S3 gerenciados. Segredos vêm do arquivo .env (copie de .env.example).
+#   docker compose -f docker-compose.prod.yml up -d --build
+x-api-env: &api-env
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql://produtiva_app:${APP_DB_PASSWORD:-produtiva_app}@postgres:5432/produtiva
+    SYSTEM_DATABASE_URL: postgresql://produtiva_system:${SYSTEM_DB_PASSWORD:-produtiva_system}@postgres:5432/produtiva
+    MIGRATION_DATABASE_URL: postgresql://produtiva:${POSTGRES_PASSWORD:-produtiva}@postgres:5432/produtiva
+    REDIS_URL: redis://redis:6379
+    S3_ENDPOINT: http://minio:9000
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_started }
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: produtiva, POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-produtiva}", POSTGRES_DB: produtiva }
+    volumes: ["pg:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "produtiva"], interval: 5s, retries: 20 }
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes: ["redis:/data"]
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment: { MINIO_ROOT_USER: "${AWS_ACCESS_KEY_ID:-produtiva}", MINIO_ROOT_PASSWORD: "${AWS_SECRET_ACCESS_KEY:-produtiva123}" }
+    volumes: ["minio:/data"]
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on: [minio]
+    entrypoint: ["sh", "-c", "until mc alias set p http://minio:9000 $${AWS_ACCESS_KEY_ID:-produtiva} $${AWS_SECRET_ACCESS_KEY:-produtiva123}; do sleep 2; done; mc mb -p p/$${S3_BUCKET:-produtiva}"]
+    env_file: .env
+    restart: "no"
+
+  # Roda uma vez: papéis, migração e RLS (idempotente). Depois rode o seed (README).
+  migrate:
+    <<: *api-env
+    build: { context: ., dockerfile: docker/api.Dockerfile }
+    image: produtiva-api
+    user: root
+    entrypoint: ["sh", "-c", "psql \"$$MIGRATION_DATABASE_URL\" -q -f node_modules/@produtiva/db/prisma/roles.sql && DATABASE_URL=$$MIGRATION_DATABASE_URL node node_modules/@produtiva/db/scripts/migrate-offline.mjs deploy && psql \"$$MIGRATION_DATABASE_URL\" -q -f node_modules/@produtiva/db/prisma/rls.sql"]
+    restart: "no"
+
+  api:
+    <<: *api-env
+    image: produtiva-api
+    depends_on: { migrate: { condition: service_completed_successfully } }
+    ports: ["3333:3333"]
+    restart: unless-stopped
+
+  worker:
+    <<: *api-env
+    image: produtiva-api
+    command: ["node", "dist/worker.js"]
+    environment:
+      DATABASE_URL: postgresql://produtiva_app:${APP_DB_PASSWORD:-produtiva_app}@postgres:5432/produtiva
+      SYSTEM_DATABASE_URL: postgresql://produtiva_system:${SYSTEM_DB_PASSWORD:-produtiva_system}@postgres:5432/produtiva
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
+      SCHEDULER: "on"
+    depends_on: { migrate: { condition: service_completed_successfully } }
+    restart: unless-stopped
+
+  rpa:
+    build: { context: ., dockerfile: docker/rpa.Dockerfile }
+    env_file: .env
+    environment:
+      SYSTEM_DATABASE_URL: postgresql://produtiva_system:${SYSTEM_DB_PASSWORD:-produtiva_system}@postgres:5432/produtiva
+      REDIS_URL: redis://redis:6379
+    depends_on: [redis, postgres]
+    restart: unless-stopped
+
+  web:
+    build: { context: ., dockerfile: docker/web.Dockerfile, args: { NEXT_PUBLIC_API_URL: "${PUBLIC_API_URL:-http://localhost:3333}" } }
+    ports: ["3000:3000"]
+    restart: unless-stopped
+
+  app-web:
+    build: { context: ., dockerfile: docker/mobile-web.Dockerfile, args: { EXPO_PUBLIC_API_URL: "${PUBLIC_API_URL:-http://localhost:3333}", EXPO_PUBLIC_OFFICE_CNPJ: "${OFFICE_CNPJ:-}" } }
+    ports: ["8081:80"]
+    restart: unless-stopped
+
+volumes:
+  pg:
+  redis:
+  minio:

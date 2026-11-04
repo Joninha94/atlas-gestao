@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.next/
+.expo/
+*.tsbuildinfo
+.env
+.env.local
+packages/db/src/generated/
+apps/mobile/dist/
+storage/
+.env.local-docker

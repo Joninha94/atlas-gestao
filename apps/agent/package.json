@@ -1,0 +1,18 @@
+{
+  "name": "@produtiva/agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Agente local: entrega os XMLs exportados na pasta de importação do Domínio/Alterdata.",
+  "type": "module",
+  "main": "agente.mjs",
+  "bin": { "produtiva-agente": "agente.mjs" },
+  "scripts": {
+    "start": "node agente.mjs",
+    "teste": "node agente.mjs --teste",
+    "test": "node --test test/agente.test.mjs",
+    "build:exe": "node scripts/build-exe.mjs"
+  },
+  "dependencies": { "fflate": "^0.8.2" },
+  "devDependencies": { "esbuild": "^0.24.0", "postject": "^1.0.0-alpha.6" },
+  "engines": { "node": ">=20" }
+}

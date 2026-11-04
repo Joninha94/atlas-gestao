@@ -1,0 +1,79 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: produtiva, POSTGRES_PASSWORD: produtiva, POSTGRES_DB: produtiva }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      MIGRATION_DATABASE_URL: postgresql://produtiva:produtiva@localhost:5432/produtiva
+      DATABASE_URL: postgresql://produtiva_app:produtiva_app@localhost:5432/produtiva
+      SYSTEM_DATABASE_URL: postgresql://produtiva_system:produtiva_system@localhost:5432/produtiva
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
+      VAULT_MASTER_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      INTEGRATIONS_MODE: sandbox
+      STORAGE_DRIVER: local
+      STORAGE_DIR: /tmp/produtiva-storage
+      PUBLIC_API_URL: http://localhost:3333
+      SEED_TENANT_CNPJ: "11444777000161"
+      SEED_ADMIN_PASSWORD: Produtiva@2026
+      BROADCAST_DELAY_MS: "10"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --no-frozen-lockfile
+      - name: Regras de negócio (core)
+        run: pnpm --filter @produtiva/core test
+      - name: Banco (papéis, migração, RLS, seed)
+        run: |
+          psql "$MIGRATION_DATABASE_URL" -q -f packages/db/prisma/roles.sql
+          pnpm --filter @produtiva/db build
+          DATABASE_URL=$MIGRATION_DATABASE_URL pnpm --filter @produtiva/db migrate:offline deploy
+          psql "$MIGRATION_DATABASE_URL" -q -f packages/db/prisma/rls.sql
+          pnpm --filter @produtiva/db seed
+      - name: Build
+        run: |
+          pnpm --filter @produtiva/api build
+          pnpm --filter @produtiva/web build
+          pnpm --filter @produtiva/rpa build
+          (cd apps/mobile && npm install --no-audit --no-fund && npx tsc --noEmit)
+          pnpm --filter @produtiva/agent test
+      - name: API + worker + testes ponta a ponta
+        run: |
+          (cd apps/api && node dist/main.js > /tmp/api.log 2>&1 &)
+          (cd apps/api && SCHEDULER=off node dist/worker.js > /tmp/worker.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf localhost:3333/health && break; sleep 1; done
+          (cd apps/api && node --test test/xmldsig.test.mjs && node test/e2e.mjs)
+      - if: failure()
+        run: tail -100 /tmp/api.log /tmp/worker.log
+
+  docker:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: { image: [api, web, rpa, mobile-web] }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/${{ matrix.image }}.Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/${{ matrix.image }}:${{ github.sha }}

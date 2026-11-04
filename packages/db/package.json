@@ -1,0 +1,32 @@
+{
+  "name": "@produtiva/db",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Schema, migrações, RLS, seed e client Prisma 7 (sem motor Rust: driver adapter pg).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "generate": "prisma generate",
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "migrate": "prisma migrate deploy",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:offline": "node scripts/migrate-offline.mjs",
+    "rls": "psql \"$DATABASE_URL\" -f prisma/rls.sql",
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "argon2": "^0.41.0",
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@prisma/driver-adapter-utils": "^7.10.0",
+    "@prisma/schema-engine-wasm": "8.1.0-1.d1b3f377ca835d73fd50954a5e22128b9ebdd6b8",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "prisma": "^7.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

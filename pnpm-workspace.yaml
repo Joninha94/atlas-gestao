@@ -1,0 +1,5 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  # O app Expo usa npm próprio (Metro + React Native preferem node_modules "hoisted")
+  - "!apps/mobile"

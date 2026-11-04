@@ -1,0 +1,7 @@
+{
+  "apiUrl": "https://api.produtivacontabilidade.com.br",
+  "token": "pga_COLE_AQUI_O_TOKEN_GERADO_NO_PAINEL",
+  "pasta": "C:\\Contabil\\Importacao\\XML",
+  "layout": "por-cnpj",
+  "sobrescrever": false
+}

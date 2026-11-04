@@ -1,0 +1,1089 @@
+// =============================================================================
+// Produtiva Gestão — modelo de dados completo
+// Multi-tenant: todo registro de negócio carrega tenantId (escritório).
+// Postgres 16 + Row-Level Security (ver migrations/rls.sql).
+// =============================================================================
+
+// Prisma 7: client sem motor Rust (query compiler WASM + driver adapter pg).
+// A URL do banco fica em prisma.config.ts.
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// -----------------------------------------------------------------------------
+// ENUMS
+// -----------------------------------------------------------------------------
+
+enum Plan {
+  ESSENCIAL
+  PROFISSIONAL
+  ENTERPRISE
+}
+
+enum UserRole {
+  ADMIN
+  GESTOR
+  COLABORADOR
+}
+
+enum TaxRegime {
+  MEI
+  SIMPLES_NACIONAL
+  LUCRO_PRESUMIDO
+  LUCRO_REAL
+  IMUNE_ISENTA
+  PESSOA_FISICA
+}
+
+enum CertificateOwner {
+  ESCRITORIO
+  CLIENTE
+}
+
+enum Channel {
+  EMAIL
+  WHATSAPP
+  APP
+}
+
+enum GuideType {
+  DAS_SIMPLES
+  DAS_MEI
+  DCTFWEB_DARF
+  FGTS_MENSAL
+  FGTS_RESCISORIA
+  FGTS_MISTA
+  PARCELAMENTO
+  DARF_AVULSO
+}
+
+enum GuideStatus {
+  PENDENTE
+  ENVIADA
+  VISUALIZADA
+  PAGA
+  VENCIDA
+  CANCELADA
+}
+
+enum DeclarationType {
+  PGDASD
+  DASN_SIMEI
+  DCTFWEB
+  FGTS_DIGITAL
+  DEFIS
+  DIRF
+}
+
+enum DeclarationStatus {
+  ENTREGUE
+  AUSENTE
+  EM_ABERTO
+  RETIFICADA
+}
+
+enum InstallmentKind {
+  PARCSN
+  PERTSN
+  RELPSN
+  PARCMEI
+  PERTMEI
+  RELPMEI
+  PGFN
+  RFB_SIMPLIFICADO_PREVIDENCIARIO
+  RFB_SIMPLIFICADO_NAO_PREVIDENCIARIO
+  ESPECIAL_LEI_11941
+  ESPECIAL_LEI_12996
+  ESPECIAL_PERT
+  OUTRO
+}
+
+enum CertidaoKind {
+  CND_FEDERAL
+  CNDT_TST
+  CRF_FGTS
+  ESTADUAL
+  MUNICIPAL
+}
+
+enum CertidaoStatus {
+  NEGATIVA
+  POSITIVA_COM_EFEITO_NEGATIVA
+  POSITIVA
+  INDISPONIVEL
+  ERRO
+}
+
+enum MailboxSource {
+  ECAC
+  FGTS_DIGITAL
+  DET
+}
+
+enum MonitorRoutine {
+  SIMPLES
+  MEI
+  DCTFWEB
+  FGTS
+  PARCELAMENTOS
+  SITUACAO_FISCAL
+  CERTIDOES
+  COMPROVANTES
+  CAIXA_POSTAL
+  DECLARACOES
+}
+
+enum FiscalDocKind {
+  NFE
+  NFCE
+  CTE
+  NFSE
+}
+
+enum FiscalDocDirection {
+  ENTRADA
+  SAIDA
+  PRESTADO
+  TOMADO
+}
+
+enum ManifestationType {
+  CIENCIA
+  CONFIRMACAO
+  DESCONHECIMENTO
+  NAO_REALIZADA
+}
+
+enum ConversationStatus {
+  NA_URA
+  AGUARDANDO
+  EM_ATENDIMENTO
+  ENCERRADA
+}
+
+enum ConversationChannel {
+  WHATSAPP
+  APP_CHAT
+}
+
+enum MessageDirection {
+  IN
+  OUT
+  NOTA_INTERNA
+}
+
+enum Recurrence {
+  NENHUMA
+  DIARIA
+  SEMANAL
+  MENSAL
+  TRIMESTRAL
+  SEMESTRAL
+  ANUAL
+}
+
+enum DeadlineMode {
+  DATA_FIXA
+  TEMPO_ESTIMADO
+}
+
+enum ProcessStatus {
+  A_FAZER
+  EM_PROGRESSO
+  CONCLUIDO
+  DISPENSADO
+  EM_MULTA
+}
+
+enum Priority {
+  BAIXA
+  MEDIA
+  ALTA
+  URGENTE
+}
+
+enum AttachmentRule {
+  OPCIONAL
+  OBRIGATORIO_PARA_CONCLUIR
+  OBRIGATORIO_CONCLUIR_E_ENVIAR
+}
+
+enum FormFieldType {
+  TEXTO
+  NUMERO
+  DATA
+  MULTIPLA_ESCOLHA
+  ESCOLHA_UNICA
+  ANEXO
+  CPF
+  CNPJ
+}
+
+enum FolderKind {
+  ESCRITORIO
+  CLIENTE_RAIZ
+  CLIENTE_LIVRE
+  SISTEMA
+  WHATSAPP
+}
+
+// -----------------------------------------------------------------------------
+// NÚCLEO
+// -----------------------------------------------------------------------------
+
+model Tenant {
+  id            String   @id @default(uuid())
+  name          String
+  cnpj          String   @unique
+  plan          Plan     @default(ESSENCIAL)
+  logoKey       String?
+  // Parametrização de disparo
+  smtpHost      String?
+  smtpPort      Int?
+  smtpUser      String?
+  smtpPassEnc   String?  // cifrado pelo Vault
+  emailFrom     String?
+  emailSignature String?
+  whatsappPhoneId String? // Cloud API phone_number_id
+  whatsappTokenEnc String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  users         User[]
+  departments   Department[]
+  clients       ClientCompany[]
+  certificates  Certificate[]
+  schedules     MonitorSchedule[]
+  templates     ProcessTemplate[]
+  folders       Folder[]
+}
+
+model User {
+  id           String    @id @default(uuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id])
+  name         String
+  email        String
+  passwordHash String
+  role         UserRole  @default(COLABORADOR)
+  totpSecretEnc String?
+  totpEnabled  Boolean   @default(false)
+  active       Boolean   @default(true)
+  departments  UserDepartment[]
+  responsibleFor ClientResponsible[]
+  createdAt    DateTime  @default(now())
+
+  @@unique([tenantId, email])
+}
+
+/** Refresh tokens rotativos (escritório e app do cliente). Guarda só o hash. */
+model RefreshToken {
+  id         String    @id @default(uuid())
+  tenantId   String
+  subject    String    // userId ou contactId
+  kind       String    // USER | CLIENT
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([subject])
+}
+
+/** Código de acesso de uso único para o app do cliente (enviado por e-mail/WhatsApp). */
+model LoginCode {
+  id         String   @id @default(uuid())
+  tenantId   String
+  contactId  String
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int      @default(0)
+  usedAt     DateTime?
+}
+
+/** Alertas no painel (sino) e push no app. */
+model Notification {
+  id        String   @id @default(uuid())
+  tenantId  String
+  userId    String?  // null = todos do escritório
+  clientId  String?
+  kind      String   // CERTIFICADO_VENCENDO | DECLARACAO_AUSENTE | GUIA_VENCIDA | OS_NOVA | RPA_MANUAL ...
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, userId, readAt])
+}
+
+/** Feriados para ajuste de prazos (nacional, estadual ou municipal). */
+model Holiday {
+  id    String   @id @default(uuid())
+  date  DateTime @db.Date
+  name  String
+  uf    String?
+  city  String?
+
+  @@unique([date, uf, city])
+}
+
+model Department {
+  id        String  @id @default(uuid())
+  tenantId  String
+  tenant    Tenant  @relation(fields: [tenantId], references: [id])
+  name      String  // Fiscal, Contábil, Pessoal, Societário, Financeiro...
+  isDefault Boolean @default(false)
+  ivrOption Int?    // número na URA
+  users     UserDepartment[]
+
+  @@unique([tenantId, name])
+}
+
+model UserDepartment {
+  userId       String
+  departmentId String
+  isManager    Boolean    @default(false)
+  user         User       @relation(fields: [userId], references: [id])
+  department   Department @relation(fields: [departmentId], references: [id])
+
+  @@id([userId, departmentId])
+}
+
+model ClientCompany {
+  id               String     @id @default(uuid())
+  tenantId         String
+  tenant           Tenant     @relation(fields: [tenantId], references: [id])
+  document         String     // CNPJ ou CPF (só dígitos)
+  legalName        String     // razão social
+  tradeName        String?
+  regime           TaxRegime
+  legalNature      String?    // natureza jurídica
+  cnae             String?
+  uf               String?
+  city             String?
+  ibgeCity         String?    // código IBGE do município (NFS-e)
+  stateRegistration String?   // inscrição estadual
+  municipalRegistration String? // inscrição municipal
+  openedAt         DateTime?
+  partners         Json?      // QSA
+  rawCnpjData      Json?      // cartão CNPJ
+  notes            String?
+  extraData        Json?
+  appAccess        Boolean    @default(false)
+  appPlus          Boolean    @default(false)
+  active           Boolean    @default(true)
+  createdAt        DateTime   @default(now())
+
+  contacts         ClientContact[]
+  responsibles     ClientResponsible[]
+  certificates     Certificate[]
+  powerOfAttorney  PowerOfAttorney?
+  guides           FiscalGuide[]
+  declarations     Declaration[]
+  installments     Installment[]
+  certidoes        Certidao[]
+  receipts         PaymentReceipt[]
+  mailbox          MailboxMessage[]
+  employees        FgtsEmployee[]
+  revenue          RevenueSnapshot[]
+  fiscalDocs       FiscalDocument[]
+  dfeCursors       DfeCursor[]
+  processes        Process[]
+  obligationRules  ClientObligation[]
+  conversations    Conversation[]
+  serviceOrders    ServiceOrder[]
+  scheduleOverrides MonitorScheduleOverride[]
+
+  @@unique([tenantId, document])
+  @@index([tenantId, regime])
+}
+
+model ClientContact {
+  id        String        @id @default(uuid())
+  clientId  String
+  client    ClientCompany @relation(fields: [clientId], references: [id])
+  name      String
+  email     String?
+  phone     String?       // E.164
+  role      String?
+  receives  Channel[]     // canais em que recebe guias
+  appLogin  Boolean       @default(false)
+}
+
+model ClientResponsible {
+  clientId     String
+  userId       String
+  departmentId String
+  client       ClientCompany @relation(fields: [clientId], references: [id])
+  user         User          @relation(fields: [userId], references: [id])
+
+  @@id([clientId, departmentId])
+}
+
+model Certificate {
+  id          String           @id @default(uuid())
+  tenantId    String
+  tenant      Tenant           @relation(fields: [tenantId], references: [id])
+  owner       CertificateOwner
+  clientId    String?
+  client      ClientCompany?   @relation(fields: [clientId], references: [id])
+  subjectName String
+  document    String
+  validFrom   DateTime
+  validTo     DateTime
+  pfxEnc      Bytes            // PFX cifrado (envelope AES-256-GCM)
+  passwordEnc String
+  dekEnc      String           // chave de dados cifrada pela chave mestra (KMS)
+  createdAt   DateTime         @default(now())
+
+  @@index([tenantId, validTo])
+}
+
+model PowerOfAttorney {
+  id         String        @id @default(uuid())
+  clientId   String        @unique
+  client     ClientCompany @relation(fields: [clientId], references: [id])
+  validTo    DateTime?
+  services   String[]      // códigos de serviços outorgados no e-CAC
+  checkedAt  DateTime
+  ok         Boolean
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  tenantId  String
+  userId    String?
+  clientId  String?
+  action    String   // ex: mailbox.ciencia, certificate.download, guide.recalc, process.dispensar
+  entity    String
+  entityId  String
+  meta      Json?
+  ip        String?
+  at        DateTime @default(now())
+
+  @@index([tenantId, at])
+}
+
+// -----------------------------------------------------------------------------
+// MONITOR FISCAL
+// -----------------------------------------------------------------------------
+
+model MonitorSchedule {
+  id          String         @id @default(uuid())
+  tenantId    String
+  tenant      Tenant         @relation(fields: [tenantId], references: [id])
+  routine     MonitorRoutine
+  dayOfMonth  Int            // dia do envio
+  channels    Channel[]
+  enabled     Boolean        @default(true)
+  // DCTFWeb
+  autoTransmit Boolean       @default(false)
+  sendOnlyInss Boolean       @default(false)
+  // Situação fiscal
+  sendReportToClient Boolean @default(false)
+
+  @@unique([tenantId, routine])
+}
+
+model MonitorScheduleOverride {
+  id         String         @id @default(uuid())
+  clientId   String
+  client     ClientCompany  @relation(fields: [clientId], references: [id])
+  routine    MonitorRoutine
+  dayOfMonth Int?
+  channels   Channel[]
+  enabled    Boolean        @default(true)
+
+  @@unique([clientId, routine])
+}
+
+model FiscalGuide {
+  id           String        @id @default(uuid())
+  tenantId     String
+  clientId     String
+  client       ClientCompany @relation(fields: [clientId], references: [id])
+  type         GuideType
+  competence   String        // AAAA-MM
+  dueDate      DateTime
+  principal    Decimal       @db.Decimal(14, 2)
+  fine         Decimal       @default(0) @db.Decimal(14, 2)
+  interest     Decimal       @default(0) @db.Decimal(14, 2)
+  total        Decimal       @db.Decimal(14, 2)
+  barcode      String?
+  pix          String?
+  pdfKey       String?       // S3
+  status       GuideStatus   @default(PENDENTE)
+  recalculatedFromId String?
+  installmentId String?
+  installment  Installment?  @relation(fields: [installmentId], references: [id])
+  details      Json?         // composição do débito, consignado etc.
+  paidAt       DateTime?
+  createdAt    DateTime      @default(now())
+  dispatches   GuideDispatch[]
+
+  @@index([tenantId, status, dueDate])
+  @@index([clientId, competence])
+}
+
+model GuideDispatch {
+  id          String      @id @default(uuid())
+  guideId     String
+  guide       FiscalGuide @relation(fields: [guideId], references: [id])
+  channel     Channel
+  recipient   String
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  viewedAt    DateTime?
+  error       String?
+  trackingToken String    @unique @default(uuid())
+}
+
+model Declaration {
+  id          String            @id @default(uuid())
+  tenantId    String
+  clientId    String
+  client      ClientCompany     @relation(fields: [clientId], references: [id])
+  type        DeclarationType
+  period      String            // AAAA-MM ou AAAA
+  status      DeclarationStatus
+  receiptKey  String?
+  declKey     String?
+  transmittedAt DateTime?
+  raw         Json?
+
+  @@unique([clientId, type, period])
+}
+
+model Installment {
+  id            String          @id @default(uuid())
+  tenantId      String
+  clientId      String
+  client        ClientCompany   @relation(fields: [clientId], references: [id])
+  kind          InstallmentKind
+  reference     String?         // PGFN: código de referência informado pelo usuário
+  number        String?
+  totalParcels  Int?
+  paidParcels   Int?
+  situation     String?
+  guides        FiscalGuide[]
+}
+
+model FiscalSituation {
+  id         String   @id @default(uuid())
+  tenantId   String
+  clientId   String
+  hasPending Boolean
+  reportKey  String   // PDF do relatório de situação fiscal
+  summary    Json?
+  fetchedAt  DateTime @default(now())
+
+  @@index([clientId, fetchedAt])
+}
+
+model Certidao {
+  id        String         @id @default(uuid())
+  tenantId  String
+  clientId  String
+  client    ClientCompany  @relation(fields: [clientId], references: [id])
+  kind      CertidaoKind
+  uf        String?
+  status    CertidaoStatus
+  validTo   DateTime?
+  fileKey   String?
+  fetchedAt DateTime       @default(now())
+}
+
+model PaymentReceipt {
+  id          String        @id @default(uuid())
+  tenantId    String
+  clientId    String
+  client      ClientCompany @relation(fields: [clientId], references: [id])
+  docNumber   String        // número do documento de arrecadação
+  paidAt      DateTime
+  amount      Decimal       @db.Decimal(14, 2)
+  revenueCode String?
+  breakdown   Json?
+  fileKey     String?
+
+  @@unique([clientId, docNumber])
+}
+
+model MailboxMessage {
+  id          String        @id @default(uuid())
+  tenantId    String
+  clientId    String
+  client      ClientCompany @relation(fields: [clientId], references: [id])
+  source      MailboxSource
+  externalId  String
+  subject     String
+  sender      String?
+  receivedAt  DateTime
+  isRead      Boolean       @default(false) // nunca marcado automaticamente
+  readByUserId String?
+  readAt      DateTime?
+  relevance   String?
+
+  @@unique([clientId, source, externalId])
+}
+
+model FgtsEmployee {
+  id           String        @id @default(uuid())
+  clientId     String
+  client       ClientCompany @relation(fields: [clientId], references: [id])
+  registration String?
+  name         String
+  cpf          String
+  admittedAt   DateTime?
+  dismissedAt  DateTime?
+  situation    String        // ATIVO | AFASTADO | DESLIGADO
+  totalPaid    Decimal?      @db.Decimal(14, 2)
+  avgSalary    Decimal?      @db.Decimal(14, 2)
+  history      Json?         // vínculo por competência, irregularidades
+
+  @@unique([clientId, cpf])
+}
+
+model RevenueSnapshot {
+  id         String        @id @default(uuid())
+  clientId   String
+  client     ClientCompany @relation(fields: [clientId], references: [id])
+  competence String        // AAAA-MM
+  revenue    Decimal       @db.Decimal(14, 2)
+  source     String        // PGDASD | XML
+
+  @@unique([clientId, competence, source])
+}
+
+// -----------------------------------------------------------------------------
+// COMUNICAÇÃO
+// -----------------------------------------------------------------------------
+
+model WhatsappNumber {
+  id          String  @id @default(uuid())
+  tenantId    String
+  phone       String
+  provider    String  // CLOUD_API | QRCODE
+  ivrEnabled  Boolean @default(false)
+  ivrConfig   Json?   // departamentos ativos, mensagens, horário, inatividade, pesquisa
+  aiRouting   Boolean @default(false)
+}
+
+model Conversation {
+  id           String              @id @default(uuid())
+  tenantId     String
+  channel      ConversationChannel
+  numberId     String?
+  clientId     String?
+  client       ClientCompany?      @relation(fields: [clientId], references: [id])
+  contactPhone String?
+  isGroup      Boolean             @default(false)
+  status       ConversationStatus  @default(NA_URA)
+  departmentId String?
+  assigneeId   String?
+  openedAt     DateTime            @default(now())
+  firstReplyAt DateTime?
+  closedAt     DateTime?
+  aiSummary    String?
+  aiSatisfaction Json?             // nota + critérios (Enterprise)
+  csatScore    Int?                // pesquisa respondida pelo cliente
+  messages     Message[]
+
+  @@index([tenantId, status])
+}
+
+model Message {
+  id             String           @id @default(uuid())
+  conversationId String
+  conversation   Conversation     @relation(fields: [conversationId], references: [id])
+  direction      MessageDirection
+  authorUserId   String?
+  signature      String?          // assinatura do atendente
+  body           String?
+  mediaKey       String?
+  mediaType      String?
+  externalId     String?
+  sentAt         DateTime         @default(now())
+  readAt         DateTime?
+}
+
+model Broadcast {
+  id         String    @id @default(uuid())
+  tenantId   String
+  numberId   String
+  name       String
+  recipients String[]  // máx. 100 (validado na API)
+  body       String
+  mediaKey   String?
+  scheduledAt DateTime?
+  sentAt     DateTime?
+}
+
+model InternalChannel {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String?
+  isDirect  Boolean  @default(false)
+  memberIds String[]
+  messages  InternalMessage[]
+}
+
+model InternalMessage {
+  id        String          @id @default(uuid())
+  channelId String
+  channel   InternalChannel @relation(fields: [channelId], references: [id])
+  authorId  String
+  body      String?
+  audioKey  String?
+  fileKey   String?
+  sentAt    DateTime        @default(now())
+}
+
+// -----------------------------------------------------------------------------
+// NOTAS FISCAIS (XML)
+// -----------------------------------------------------------------------------
+
+model FiscalDocument {
+  id          String             @id @default(uuid())
+  tenantId    String
+  clientId    String
+  client      ClientCompany      @relation(fields: [clientId], references: [id])
+  kind        FiscalDocKind
+  direction   FiscalDocDirection
+  accessKey   String             // chave de acesso / código NFS-e
+  number      String
+  series      String?
+  issuedAt    DateTime
+  competence  String             // AAAA-MM
+  issuerDoc   String
+  issuerName  String
+  receiverDoc String?
+  receiverName String?
+  totalAmount Decimal            @db.Decimal(14, 2)
+  icms        Decimal?           @db.Decimal(14, 2)
+  iss         Decimal?           @db.Decimal(14, 2)
+  pis         Decimal?           @db.Decimal(14, 2)
+  cofins      Decimal?           @db.Decimal(14, 2)
+  freight     Decimal?           @db.Decimal(14, 2)
+  retentions  Json?
+  status      String             // AUTORIZADA | CANCELADA | DENEGADA
+  xmlKey      String
+  pdfKey      String?
+  tags        String[]
+  exportedAt  DateTime?
+  items       FiscalDocumentItem[]
+  manifestations Manifestation[]
+
+  @@unique([clientId, accessKey])
+  @@index([clientId, competence, kind])
+}
+
+model FiscalDocumentItem {
+  id         String         @id @default(uuid())
+  documentId String
+  document   FiscalDocument @relation(fields: [documentId], references: [id])
+  code       String?
+  description String
+  ncm        String?
+  cfop       String?
+  quantity   Decimal        @db.Decimal(14, 4)
+  unitValue  Decimal        @db.Decimal(14, 4)
+  total      Decimal        @db.Decimal(14, 2)
+  generatesCredit Boolean?  // usado em oportunidades da reforma
+}
+
+model DfeCursor {
+  id        String        @id @default(uuid())
+  clientId  String
+  client    ClientCompany @relation(fields: [clientId], references: [id])
+  kind      FiscalDocKind
+  lastNsu   String        @default("0")
+  referenceKey String?    // nota de referência p/ notas de saída
+  nextAllowedAt DateTime?
+
+  @@unique([clientId, kind])
+}
+
+model Manifestation {
+  id         String            @id @default(uuid())
+  documentId String
+  document   FiscalDocument    @relation(fields: [documentId], references: [id])
+  type       ManifestationType
+  byUserId   String?
+  byClient   Boolean           @default(false)
+  protocol   String?
+  at         DateTime          @default(now())
+}
+
+model ExportJob {
+  id          String    @id @default(uuid())
+  tenantId    String
+  target      String    // DOMINIO | ALTERDATA | ZIP
+  runAt       DateTime
+  docsCount   Int
+  fileKey     String?
+  error       String?
+  deliveredAt DateTime? // quando o agente local gravou na pasta de importação
+  deliveredBy String?   // AgentDevice.id
+  deliveryLog Json?     // pasta e arquivos gravados
+
+  @@index([tenantId, deliveredAt])
+}
+
+/// Agente local (Windows) instalado no escritório: baixa as exportações de XML e grava na pasta
+/// de importação do Domínio/Alterdata. Autentica com token próprio (só o hash fica no banco).
+model AgentDevice {
+  id         String    @id @default(uuid())
+  tenantId   String
+  name       String
+  tokenHash  String    @unique
+  target     String    @default("DOMINIO") // DOMINIO | ALTERDATA | ZIP
+  lastSeenAt DateTime?
+  lastIp     String?
+  version    String?
+  createdAt  DateTime  @default(now())
+  revokedAt  DateTime?
+
+  @@index([tenantId])
+}
+
+/// Job que falhou de vez (esgotou as tentativas): vira alerta no painel e fica para reprocessar.
+model JobFailure {
+  id         String    @id @default(uuid())
+  tenantId   String?
+  queue      String
+  name       String
+  jobId      String?
+  clientId   String?
+  error      String
+  data       Json?
+  attempts   Int       @default(0)
+  at         DateTime  @default(now())
+  resolvedAt DateTime?
+  resolvedBy String?
+
+  @@index([tenantId, resolvedAt])
+}
+
+// -----------------------------------------------------------------------------
+// TAREFAS E ORDEM DE SERVIÇO
+// -----------------------------------------------------------------------------
+
+model ProcessTemplate {
+  id           String       @id @default(uuid())
+  tenantId     String?      // null = modelo global pré-configurado
+  tenant       Tenant?      @relation(fields: [tenantId], references: [id])
+  name         String
+  category     String?
+  regimes      TaxRegime[]  // clientes desses regimes entram automaticamente
+  departmentId String?
+  deadlineMode DeadlineMode @default(DATA_FIXA)
+  dueDay       Int?         // dia do mês (DATA_FIXA)
+  dueMonthOffset Int        @default(0) // 0 = mesmo mês da competência, 1 = mês seguinte
+  dueBusinessDay Int?       // prazo no N-ésimo dia útil do mês (ex.: EFD-Contribuições = 10); prevalece sobre dueDay
+  postpone     Boolean      @default(false) // prazo em dia não útil: true = posterga, false = antecipa
+  ufs          String[]     @default([])    // vazio = todas as UFs; ex.: ["AL"] para obrigações estaduais
+  optIn        Boolean      @default(false) // true = só para clientes marcados (ex.: DIMOB, IPI, DeSTDA)
+  notes        String?      // base legal e observações para o time
+  estimatedHours Int?
+  targetDay    Int?         // meta interna de entrega
+  generatesFine Boolean     @default(false)
+  cascade      Boolean      @default(false)
+  recurrence   Recurrence   @default(MENSAL)
+  recurrenceMonth Int?      // para ANUAL
+  dueSameYear  Boolean      @default(false) // ANUAL: prazo no mesmo ano da competência (13º, férias coletivas)
+  monitorLink  MonitorRoutine? // concluído automaticamente pelo Monitor
+  createdByAi  Boolean      @default(false)
+  steps        TemplateStep[]
+  processes    Process[]
+  clientRules  ClientObligation[]
+}
+
+/// Ajuste por cliente: liga um modelo "optIn" ou desliga um modelo automático (ex.: empresa sem empregados).
+model ClientObligation {
+  tenantId   String
+  clientId   String
+  client     ClientCompany   @relation(fields: [clientId], references: [id])
+  templateId String
+  template   ProcessTemplate @relation(fields: [templateId], references: [id])
+  enabled    Boolean
+  updatedAt  DateTime        @updatedAt
+
+  @@id([clientId, templateId])
+  @@index([tenantId])
+}
+
+model TemplateStep {
+  id          String          @id @default(uuid())
+  templateId  String
+  template    ProcessTemplate @relation(fields: [templateId], references: [id])
+  order       Int
+  title       String
+  dueOffsetDays Int           @default(0)
+  priority    Priority        @default(MEDIA)
+  attachment  AttachmentRule  @default(OPCIONAL)
+  documentHint String?        // ajuda a IA a casar documento → etapa
+}
+
+model Process {
+  id           String          @id @default(uuid())
+  tenantId     String
+  templateId   String?
+  template     ProcessTemplate? @relation(fields: [templateId], references: [id])
+  clientId     String
+  client       ClientCompany   @relation(fields: [clientId], references: [id])
+  title        String
+  competence   String
+  dueDate      DateTime
+  status       ProcessStatus   @default(A_FAZER)
+  dismissReason String?        // obrigatório se DISPENSADO
+  assigneeIds  String[]
+  departmentIds String[]
+  completedAt  DateTime?
+  tasks        ProcessTask[]
+  comments     TaskComment[]
+
+  @@unique([templateId, clientId, competence])
+  @@index([tenantId, dueDate, status])
+}
+
+model ProcessTask {
+  id          String         @id @default(uuid())
+  processId   String
+  process     Process        @relation(fields: [processId], references: [id])
+  order       Int
+  title       String
+  dueDate     DateTime
+  priority    Priority
+  attachment  AttachmentRule
+  done        Boolean        @default(false)
+  doneById    String?
+  doneAt      DateTime?
+  blocked     Boolean        @default(false) // cascata
+  attachments TaskAttachment[]
+}
+
+model TaskAttachment {
+  id        String      @id @default(uuid())
+  taskId    String
+  task      ProcessTask @relation(fields: [taskId], references: [id])
+  fileKey   String
+  fileName  String
+  sentToClientAt DateTime?
+  matchedByAi Boolean   @default(false)
+}
+
+model TaskComment {
+  id        String   @id @default(uuid())
+  processId String
+  process   Process  @relation(fields: [processId], references: [id])
+  authorId  String
+  body      String
+  at        DateTime @default(now())
+}
+
+model ServiceForm {
+  id           String   @id @default(uuid())
+  tenantId     String?
+  name         String   // ex: Admissão, Exame admissional, Férias
+  departmentId String?
+  fields       Json     // [{label, type: FormFieldType, required, options}]
+  createdByAi  Boolean  @default(false)
+  orders       ServiceOrder[]
+}
+
+model ServiceOrder {
+  id         String        @id @default(uuid())
+  tenantId   String
+  formId     String
+  form       ServiceForm   @relation(fields: [formId], references: [id])
+  clientId   String
+  client     ClientCompany @relation(fields: [clientId], references: [id])
+  answers    Json
+  processId  String?
+  status     ProcessStatus @default(A_FAZER)
+  createdAt  DateTime      @default(now())
+}
+
+// -----------------------------------------------------------------------------
+// DRIVE
+// -----------------------------------------------------------------------------
+
+model Folder {
+  id         String     @id @default(uuid())
+  tenantId   String
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  parentId   String?
+  parent     Folder?    @relation("FolderTree", fields: [parentId], references: [id])
+  children   Folder[]   @relation("FolderTree")
+  clientId   String?
+  kind       FolderKind
+  name       String
+  sharedWithClient Boolean @default(false)
+  clientCanUpload  Boolean @default(false)
+  deletedAt  DateTime?
+  files      File[]
+
+  @@index([tenantId, clientId])
+}
+
+model File {
+  id         String    @id @default(uuid())
+  folderId   String
+  folder     Folder    @relation(fields: [folderId], references: [id])
+  name       String
+  key        String    // S3
+  size       Int
+  mime       String
+  uploadedBy String?   // userId ou "client:<contactId>" ou "system"
+  deletedAt  DateTime? // lixeira: apagado de fato após 20 dias
+  createdAt  DateTime  @default(now())
+}
+
+// -----------------------------------------------------------------------------
+// APP DO CLIENTE
+// -----------------------------------------------------------------------------
+
+model NfseIssuerConfig {
+  id         String  @id @default(uuid())
+  clientId   String  @unique
+  serviceCode String // item da lista de serviços
+  cnae       String?
+  issRate    Decimal @db.Decimal(5, 2)
+  description String?
+  defaults   Json?
+}
+
+model NfseTaker {
+  id        String @id @default(uuid())
+  clientId  String
+  document  String
+  name      String
+  email     String?
+  address   Json?
+
+  @@unique([clientId, document])
+}
+
+model NfseRecurring {
+  id        String   @id @default(uuid())
+  clientId  String
+  takerId   String
+  amount    Decimal  @db.Decimal(14, 2)
+  description String
+  dayOfMonth Int
+  active    Boolean  @default(true)
+}
+
+model PushToken {
+  id        String @id @default(uuid())
+  contactId String
+  token     String @unique
+  platform  String // ios | android | web
+}
