@@ -10,15 +10,25 @@ LOG=$ROOT/.demo-logs; mkdir -p "$LOG"
 step() { echo; echo "==> $*"; }
 
 step "Postgres e Redis"
-if ! command -v pg_ctl >/dev/null && ! ls /usr/bin/postgresql-setup >/dev/null 2>&1; then
-  sudo dnf install -y -q postgresql16-server postgresql16 redis6 >/dev/null
+if command -v apt-get >/dev/null; then
+  # Ubuntu/Debian (ex.: Vercel Sandbox)
+  if ! command -v redis-server >/dev/null || ! ls /usr/lib/postgresql >/dev/null 2>&1; then
+    sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql redis-server >/dev/null
+  fi
+  sudo service postgresql start >/dev/null 2>&1 || sudo pg_ctlcluster "$(ls /usr/lib/postgresql | sort -n | tail -1)" main start
+  redis-cli ping >/dev/null 2>&1 || redis-server --daemonize yes >/dev/null
+else
+  # Amazon Linux / Fedora
+  command -v redis6-server >/dev/null || sudo dnf install -y -q postgresql16-server postgresql16 redis6 >/dev/null
+  if [ ! -d /var/lib/pgsql/data/base ]; then
+    sudo postgresql-setup --initdb >/dev/null
+    sudo sed -i 's/^\(host.*\)ident$/\1md5/; s/^\(local.*\)peer$/\1md5/' /var/lib/pgsql/data/pg_hba.conf
+  fi
+  sudo systemctl start postgresql 2>/dev/null || sudo -u postgres pg_ctl -D /var/lib/pgsql/data -l /var/lib/pgsql/pg.log start -w
+  redis-cli ping >/dev/null 2>&1 || redis6-server --daemonize yes >/dev/null 2>&1 || redis-server --daemonize yes >/dev/null
 fi
-if [ ! -d /var/lib/pgsql/data/base ]; then
-  sudo postgresql-setup --initdb >/dev/null
-  sudo sed -i 's/^\(host.*\)ident$/\1md5/; s/^\(local.*\)peer$/\1md5/' /var/lib/pgsql/data/pg_hba.conf
-fi
-sudo systemctl start postgresql 2>/dev/null || sudo -u postgres pg_ctl -D /var/lib/pgsql/data -l /var/lib/pgsql/pg.log start -w
-(sudo systemctl start redis6 2>/dev/null || redis6-server --daemonize yes >/dev/null 2>&1 || redis-server --daemonize yes >/dev/null)
+for i in $(seq 1 30); do sudo -u postgres psql -qtc "select 1" >/dev/null 2>&1 && break; sleep 1; done
 sudo -u postgres psql -qtc "SELECT 1 FROM pg_roles WHERE rolname='produtiva'" | grep -q 1 || sudo -u postgres psql -qc "CREATE ROLE produtiva LOGIN PASSWORD 'produtiva' CREATEDB"
 sudo -u postgres psql -qtc "SELECT 1 FROM pg_database WHERE datname='produtiva'" | grep -q 1 || sudo -u postgres psql -qc "CREATE DATABASE produtiva OWNER produtiva"
 export PGPASSWORD=produtiva
