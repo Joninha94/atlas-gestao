@@ -3,6 +3,7 @@ import { Pressable, Text, View } from 'react-native';
 import { Button, C, Card, Chips, Empty, Input, Loading, Row, Screen, Sheet, s } from '../components/ui';
 import { api } from '../lib/api';
 import { brl, doc } from '../lib/format';
+import { erroDocumento, formatDocumento, onlyDigits } from '../lib/documentos';
 import { useAction, useApi } from '../lib/hooks';
 
 /** App+: emissão de NFS-e (Padrão Nacional) pelo próprio cliente, com tomadores salvos e notas recorrentes. */
@@ -61,10 +62,11 @@ export default function Nfse() {
 
       <Sheet open={!!newTaker} title="Novo tomador" onClose={() => setNewTaker(null)}>
         {newTaker && <>
-          <Input label="CNPJ ou CPF" value={newTaker.document} onChangeText={(v) => setNewTaker({ ...newTaker, document: v })} keyboardType="number-pad" />
+          <Input label="CNPJ ou CPF" value={newTaker.document} onChangeText={(v) => setNewTaker({ ...newTaker, document: formatDocumento(v) })} keyboardType="number-pad" maxLength={18} />
+          {onlyDigits(newTaker.document).length >= 11 && erroDocumento(newTaker.document, 'auto') && <Text style={{ color: C.red, fontSize: 12 }}>{erroDocumento(newTaker.document, 'auto')}</Text>}
           <Input label="Nome / razão social" value={newTaker.name} onChangeText={(v) => setNewTaker({ ...newTaker, name: v })} />
           <Input label="E-mail (recebe a nota)" value={newTaker.email} onChangeText={(v) => setNewTaker({ ...newTaker, email: v })} autoCapitalize="none" keyboardType="email-address" />
-          <Button title="Salvar tomador" loading={busy} disabled={!newTaker.document || newTaker.name.length < 2} onPress={() => run(async () => {
+          <Button title="Salvar tomador" loading={busy} disabled={!newTaker.document || !!erroDocumento(newTaker.document, 'auto') || newTaker.name.length < 2} onPress={() => run(async () => {
             const t = await api<any>('/app/nfse/takers', { body: { ...newTaker, email: newTaker.email || undefined } });
             setNewTaker(null); setTakerId(t.id); reloadTakers();
           })} />

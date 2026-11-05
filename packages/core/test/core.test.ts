@@ -160,3 +160,44 @@ test('anual no próprio ano (13º salário) e anual com ano-base (DEFIS)', () =>
   assert.equal(competenceToGenerate(defis, new Date('2026-01-01T12:00:00Z')), '2025');
   assert.equal(dueDateForTemplate(defis, '2025').toISOString().slice(0, 10), '2026-03-31');
 });
+
+import { fromCnpjWs, formatCnpj, formatCpf, formatDocumento } from '../src/cnpjws';
+
+test('consulta pública de CNPJ: mapeia endereço, IE ativa da UF, sócios e regime sugerido', () => {
+  const json = {
+    razao_social: 'EMPRESA FICTICIA COMERCIO LTDA', capital_social: '50000.00',
+    natureza_juridica: { id: '2062', descricao: 'Sociedade Empresária Limitada' }, porte: { descricao: 'Micro Empresa' },
+    simples: { simples: 'Sim', mei: 'Não' },
+    socios: [{ nome: 'MARIA FICTICIA', qualificacao_socio: { descricao: 'Sócio-Administrador ' } }],
+    estabelecimento: {
+      cnpj: '11444777000161', nome_fantasia: 'LOJA FICTICIA', situacao_cadastral: 'Ativa',
+      tipo_logradouro: 'RUA', logradouro: 'DAS FLORES', numero: '10', complemento: 'SALA  2', bairro: 'CENTRO', cep: '57000000',
+      ddd1: '82', telefone1: '31858315', email: 'CONTATO@FICTICIA.COM.BR', data_inicio_atividade: '2020-01-02',
+      atividade_principal: { id: '4751201', descricao: 'Comércio varejista' },
+      cidade: { nome: 'Maceió', ibge_id: 2704302 }, estado: { sigla: 'AL' },
+      inscricoes_estaduais: [
+        { inscricao_estadual: '111', ativo: false, estado: { sigla: 'AL' } },
+        { inscricao_estadual: '222', ativo: true, estado: { sigla: 'PE' } },
+        { inscricao_estadual: '333', ativo: true, estado: { sigla: 'AL' } },
+      ],
+    },
+  };
+  const d = fromCnpjWs(json);
+  assert.equal(d.street, 'RUA DAS FLORES, 10, SALA 2');
+  assert.equal(d.stateRegistration, '333');
+  assert.equal(d.phone, '(82) 3185-8315');
+  assert.equal(d.email, 'contato@ficticia.com.br');
+  assert.equal(d.suggestedRegime, 'SIMPLES_NACIONAL');
+  assert.equal(d.shareCapital, 50000);
+  assert.deepEqual(d.partners[0], { name: 'MARIA FICTICIA', role: 'Sócio-Administrador' });
+  assert.equal(d.ibgeCity, '2704302');
+});
+
+test('máscaras de CNPJ e CPF no padrão da Receita, inclusive digitando', () => {
+  assert.equal(formatCnpj('11444777000161'), '11.444.777/0001-61');
+  assert.equal(formatCnpj('114447'), '11.444.7');
+  assert.equal(formatCpf('52998224725'), '529.982.247-25');
+  assert.equal(formatCpf('5299'), '529.9');
+  assert.equal(formatDocumento('529.982.247-25'), '529.982.247-25');
+  assert.equal(formatDocumento('114447770001'), '11.444.777/0001');
+});

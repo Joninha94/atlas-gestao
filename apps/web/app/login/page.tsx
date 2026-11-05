@@ -1,5 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
+import { DocInput } from '../../components/DocInput';
 import { FormEvent, useState } from 'react';
 import { api, setSession } from '../../lib/api';
 import { Button, Field } from '../../components/ui';
@@ -44,7 +45,7 @@ export default function LoginPage() {
         </div>
         <div className="space-y-3.5">
           <Field label="CNPJ do escritório">
-            <input className="input" value={form.cnpj} onChange={set('cnpj')} placeholder="00.000.000/0000-00" required autoFocus />
+            <DocInput tipo="cnpj" value={form.cnpj} onChange={(v) => setForm((f) => ({ ...f, cnpj: v }))} required autoFocus />
           </Field>
           <Field label="E-mail">
             <input className="input" type="email" value={form.email} onChange={set('email')} required autoComplete="username" />

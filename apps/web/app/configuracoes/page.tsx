@@ -4,6 +4,8 @@ import { useSearchParams } from 'next/navigation';
 import { Activity, Copy, HardDriveDownload, KeyRound, Mail, RotateCcw, ShieldCheck } from 'lucide-react';
 import { apiDelete, apiPost, apiPut, uploadFiles } from '../../lib/api';
 import { toast, useAction, useApi } from '../../lib/hooks';
+import { DocInput } from '../../components/DocInput';
+import { erroDocumento, formatCnpj, formatCpf } from '../../lib/documentos';
 import { date, dateTime, doc, label } from '../../lib/format';
 import { Badge, Button, Card, Field, Loading, Modal, PageHeader, Select, Stat, Table, Tabs } from '../../components/ui';
 
@@ -40,12 +42,14 @@ function Escritorio() {
   const [f, setF] = useState<any>(null);
   const [testTo, setTestTo] = useState('');
   const [o, setO] = useState<any>(null);
-  useEffect(() => { if (data && !o) setO({ cnpj: doc(data.cnpj), ...Object.fromEntries(Object.entries(data.office ?? {}).map(([k, v]) => [k, k === 'zipCode' && v ? String(v).replace(/^(\d{5})(\d{3})$/, '$1-$2') : k === 'accountantCpf' && v ? doc(String(v)) : v ?? ''])) }); }, [data, o]);
+  useEffect(() => { if (data && !o) setO({ cnpj: formatCnpj(data.cnpj), ...Object.fromEntries(Object.entries(data.office ?? {}).map(([k, v]) => [k, k === 'zipCode' && v ? String(v).replace(/^(\d{5})(\d{3})$/, '$1-$2') : k === 'accountantCpf' && v ? formatCpf(String(v)) : v ?? ''])) }); }, [data, o]);
   const { busy, run } = useAction();
   useEffect(() => { if (data && !f) setF({ name: data.name, smtpHost: data.smtpHost ?? '', smtpPort: data.smtpPort ?? 587, smtpUser: data.smtpUser ?? '', smtpPass: '', emailFrom: data.emailFrom ?? '', emailSignature: data.emailSignature ?? '', whatsappPhoneId: data.whatsappPhoneId ?? '', whatsappToken: '' }); }, [data, f]);
   if (!data || !f || !o) return <Loading />;
   /** Um único salvamento: dados do escritório/papel timbrado + e-mail e WhatsApp de disparo. */
   const save = () => run(async () => {
+    const e1 = erroDocumento(o.cnpj, 'cnpj') ?? (o.accountantCpf ? erroDocumento(o.accountantCpf, 'cpf') : null);
+    if (e1) throw new Error(e1);
     const r = await apiPut('/settings/office', { ...o, name: f.name });
     await apiPut('/settings/dispatch', { ...f, smtpPort: Number(f.smtpPort) || undefined, smtpPass: f.smtpPass || undefined, whatsappToken: f.whatsappToken || undefined, emailFrom: f.emailFrom || undefined });
     if (r.cnpj !== data.cnpj) toast('CNPJ do escritório alterado: use o novo CNPJ no próximo login.');
@@ -91,7 +95,7 @@ function Escritorio() {
             <p className="text-xs text-ink-muted">Estes dados aparecem no cabeçalho/rodapé do papel timbrado e no bloco do escritório da Relação de Faturamento.</p>
             <div className="grid grid-cols-6 gap-3">
               <div className="col-span-6"><Field label="Razão social"><input className="input" value={o.legalName} onChange={(e) => setO({ ...o, legalName: e.target.value })} placeholder="PRODUTIVA CONTABILIDADE E ASSESSORIA LTDA" /></Field></div>
-              <div className="col-span-3"><Field label="CNPJ do escritório" hint="É também o CNPJ usado para entrar no sistema."><input className="input" value={o.cnpj} onChange={(e) => setO({ ...o, cnpj: e.target.value })} /></Field></div>
+              <div className="col-span-3"><Field label="CNPJ do escritório" hint="É também o CNPJ usado para entrar no sistema."><DocInput tipo="cnpj" value={o.cnpj} onChange={(v) => setO({ ...o, cnpj: v })} /></Field></div>
               <div className="col-span-3"><Field label="Telefones"><input className="input" value={o.phone} onChange={(e) => setO({ ...o, phone: e.target.value })} placeholder="(82) 3185.8315 | 99602.0966" /></Field></div>
               <div className="col-span-6"><Field label="Endereço (logradouro, número, sala)"><input className="input" value={o.street} onChange={(e) => setO({ ...o, street: e.target.value })} /></Field></div>
               <div className="col-span-3"><Field label="Bairro"><input className="input" value={o.district} onChange={(e) => setO({ ...o, district: e.target.value })} /></Field></div>
@@ -105,7 +109,7 @@ function Escritorio() {
               <div className="grid grid-cols-6 gap-3">
                 <div className="col-span-6"><Field label="Nome completo"><input className="input" value={o.accountantName} onChange={(e) => setO({ ...o, accountantName: e.target.value })} /></Field></div>
                 <div className="col-span-3"><Field label="CRC"><input className="input" value={o.accountantCrc} onChange={(e) => setO({ ...o, accountantCrc: e.target.value })} placeholder="AL-000000/O-0" /></Field></div>
-                <div className="col-span-3"><Field label="CPF"><input className="input" value={o.accountantCpf} onChange={(e) => setO({ ...o, accountantCpf: e.target.value })} /></Field></div>
+                <div className="col-span-3"><Field label="CPF"><DocInput tipo="cpf" value={o.accountantCpf} onChange={(v) => setO({ ...o, accountantCpf: v })} /></Field></div>
               </div>
             </div>
           </div>

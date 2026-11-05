@@ -1,10 +1,12 @@
 'use client';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { Plus, Upload } from 'lucide-react';
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { apiPost } from '../../lib/api';
+import { api, apiPost } from '../../lib/api';
+import { DocInput } from '../../components/DocInput';
+import { erroDocumento, formatCep, formatCnpj, onlyDigits } from '../../lib/documentos';
 import { useAction, useApi } from '../../lib/hooks';
 import { date, doc, label } from '../../lib/format';
 import { Badge, Button, Card, Field, Loading, Modal, PageHeader, Select, Stat, Table, Tabs } from '../../components/ui';
@@ -28,12 +30,25 @@ function Clientes() {
 }
 
 function List() {
+  const params = useSearchParams();
   const [f, setF] = useState({ q: '', regime: '', uf: '', active: '' });
   const qs = new URLSearchParams(Object.fromEntries(Object.entries(f).filter(([, v]) => v))).toString();
   const { data, reload } = useApi<any[]>(`/clients?${qs}`);
   const { data: deps } = useApi<any[]>('/departments');
   const { data: users } = useApi<any[]>('/users');
   const [form, setForm] = useState<any>(null);
+  const [consulta, setConsulta] = useState<{ loading: boolean; erro?: string; r?: any }>({ loading: false });
+  // Vindo da Consulta CNPJ (?novo=CNPJ): abre o cadastro já com a consulta feita (a API usa o cache, não gasta limite)
+  useEffect(() => {
+    const novo = onlyDigits(params.get('novo') ?? '');
+    if (novo.length !== 14) return;
+    setForm({ document: formatCnpj(novo), regime: 'SIMPLES_NACIONAL', contact: { name: '', email: '', phone: '', appLogin: true }, responsibles: {} });
+    setConsulta({ loading: true });
+    api<any>(`/cnpj/${novo}`).then((r) => {
+      setConsulta({ loading: false, r });
+      setForm((f: any) => ({ ...f, regime: r.dados.suggestedRegime ?? f.regime, contact: { ...f.contact, email: r.dados.email ?? '' } }));
+    }).catch((e) => setConsulta({ loading: false, erro: (e as Error).message }));
+  }, [params]);
   const [csv, setCsv] = useState<string | null>(null);
   const [report, setReport] = useState<any[] | null>(null);
   const { busy, run } = useAction();
@@ -53,7 +68,7 @@ function List() {
         <Select value={f.active} onChange={(v) => setF({ ...f, active: v })} options={[{ value: '', label: 'Ativos' }, { value: 'false', label: 'Inativos' }]} />
         <div className="ml-auto flex gap-2">
           <Button variant="secondary" size="sm" onClick={() => setCsv('')}><Upload size={14} /> Importar planilha</Button>
-          <Button size="sm" onClick={() => setForm({ document: '', regime: 'SIMPLES_NACIONAL', contact: { name: '', email: '', phone: '', appLogin: true }, responsibles: {} })}><Plus size={14} /> Novo cliente</Button>
+          <Button size="sm" onClick={() => { setConsulta({ loading: false }); setForm({ document: '', regime: 'SIMPLES_NACIONAL', contact: { name: '', email: '', phone: '', appLogin: true }, responsibles: {} }); }}><Plus size={14} /> Novo cliente</Button>
         </div>
       </div>
       {!data ? <Loading /> : (
@@ -72,18 +87,32 @@ function List() {
         </Table>
       )}
 
-      <Modal wide open={!!form} title="Novo cliente" onClose={() => setForm(null)} footer={<Button disabled={busy || !form?.document} onClick={() => run(async () => {
+      <Modal wide open={!!form} title="Novo cliente" onClose={() => setForm(null)} footer={<Button disabled={busy || !form?.document || !!erroDocumento(form?.document ?? '', 'auto')} onClick={() => run(async () => {
         const responsibles = Object.entries(form.responsibles).filter(([, u]) => u).map(([departmentId, userId]) => ({ departmentId, userId }));
         const contacts = form.contact.name ? [{ ...form.contact, receives: ['EMAIL', 'WHATSAPP', 'APP'] }] : [];
         await apiPost('/clients', { document: form.document, regime: form.regime, contacts, responsibles });
         setForm(null); reload();
       }, 'Cliente cadastrado. Pastas e obrigações do regime já foram criadas.')}>{busy ? 'Buscando dados do CNPJ…' : 'Cadastrar'}</Button>}>
         {form && <>
-          <p className="text-sm text-ink-soft">Informe o CNPJ: razão social, endereço, CNAE e quadro de sócios vêm automaticamente.</p>
+          <p className="text-sm text-ink-soft">Informe o CNPJ e clique em <b>Consultar</b>: razão social, endereço, CNAE, inscrição estadual, sócios e regime vêm da consulta pública da Receita (CNPJ.ws).</p>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="CNPJ ou CPF"><input className="input" value={form.document} onChange={(e) => setForm({ ...form, document: e.target.value })} autoFocus /></Field>
-            <Field label="Regime tributário"><Select className="w-full" value={form.regime} onChange={(v) => setForm({ ...form, regime: v })} options={['MEI', 'SIMPLES_NACIONAL', 'LUCRO_PRESUMIDO', 'LUCRO_REAL', 'IMUNE_ISENTA', 'PESSOA_FISICA'].map((v) => ({ value: v, label: label(v) }))} /></Field>
+            <Field label="CNPJ ou CPF">
+              <div className="flex items-start gap-2">
+                <div className="flex-1"><DocInput tipo="auto" value={form.document} autoFocus onChange={(v) => { setForm({ ...form, document: v }); setConsulta({ loading: false }); }} /></div>
+                <Button type="button" variant="secondary" disabled={consulta.loading || onlyDigits(form.document).length !== 14 || !!erroDocumento(form.document, 'cnpj')} onClick={async () => {
+                  setConsulta({ loading: true });
+                  try {
+                    const r = await api<any>(`/cnpj/${onlyDigits(form.document)}`);
+                    setConsulta({ loading: false, r });
+                    if (r.dados.suggestedRegime) setForm((f: any) => ({ ...f, regime: r.dados.suggestedRegime }));
+                  } catch (e) { setConsulta({ loading: false, erro: (e as Error).message }); }
+                }}>{consulta.loading ? 'Consultando…' : 'Consultar'}</Button>
+              </div>
+            </Field>
+            <Field label="Regime tributário" hint={consulta.r?.dados.suggestedRegime ? 'Sugerido pela opção no Simples/MEI da consulta.' : undefined}><Select className="w-full" value={form.regime} onChange={(v) => setForm({ ...form, regime: v })} options={['MEI', 'SIMPLES_NACIONAL', 'LUCRO_PRESUMIDO', 'LUCRO_REAL', 'IMUNE_ISENTA', 'PESSOA_FISICA'].map((v) => ({ value: v, label: label(v) }))} /></Field>
           </div>
+          {consulta.erro && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{consulta.erro}</div>}
+          {consulta.r && <PreviaCnpj r={consulta.r} />}
           <div className="rounded-md border border-slate-200 p-3">
             <div className="mb-2 text-xs font-semibold uppercase text-ink-muted">Contato principal (recebe as guias)</div>
             <div className="grid grid-cols-3 gap-3">
@@ -140,6 +169,33 @@ function Donut({ data }: { data: { name: string; value: number }[] }) {
     <div className="flex h-56 items-center gap-4">
       <div className="h-full w-1/2"><ResponsiveContainer><PieChart><Pie data={data} dataKey="value" nameKey="name" innerRadius={45} outerRadius={80}>{data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer></div>
       <ul className="space-y-1 text-sm">{data.map((d, i) => <li key={d.name} className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: COLORS[i % COLORS.length] }} />{d.name} <span className="font-semibold">{d.value}</span></li>)}</ul>
+    </div>
+  );
+}
+
+/** Prévia do que será cadastrado a partir da consulta de CNPJ. */
+function PreviaCnpj({ r }: { r: any }) {
+  const d = r.dados;
+  const ativa = (d.situation ?? '').toLowerCase() === 'ativa';
+  const linha = (rot: string, val?: string | null) => <div className="flex gap-2 text-sm"><span className="w-32 shrink-0 text-ink-muted">{rot}</span><span className="min-w-0">{val || '—'}</span></div>;
+  return (
+    <div className="rounded-md border border-brand-200 bg-brand-50/40 p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="font-semibold">{d.legalName}</span>
+        <Badge tone={ativa ? 'green' : 'red'}>{d.situation ?? 'situação desconhecida'}</Badge>
+        {r.fonte === 'simulado' && <Badge tone="amber">dados simulados (sandbox)</Badge>}
+      </div>
+      {!ativa && <p className="mb-2 text-xs text-red-700">Atenção: a empresa não está ativa na Receita Federal.</p>}
+      <div className="grid gap-1 md:grid-cols-2">
+        {linha('Nome fantasia', d.tradeName)}
+        {linha('CNAE principal', d.cnae ? `${d.cnae} · ${d.cnaeDescription ?? ''}` : null)}
+        {linha('Endereço', [d.street, d.district].filter(Boolean).join(' - '))}
+        {linha('Cidade/UF', d.city ? `${d.city}/${d.uf} · CEP ${formatCep(d.zipCode ?? '')}` : null)}
+        {linha('Inscrição estadual', d.stateRegistration ?? (d.stateRegistrations?.length ? 'nenhuma ativa' : null))}
+        {linha('Sócio que assina', d.partners?.[0]?.name)}
+        {linha('Telefone', d.phone)}
+        {linha('E-mail', d.email)}
+      </div>
     </div>
   );
 }

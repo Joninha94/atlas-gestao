@@ -10,6 +10,13 @@ import { useApi, toast } from '../lib/hooks';
 import { dateTime } from '../lib/format';
 import { Toaster } from './ui';
 
+/** Ícone próprio (sem biblioteca) para a Consulta CNPJ, no mesmo formato dos demais. */
+const IconeConsulta = ({ size = 17, strokeWidth = 1.8 }: { size?: number; strokeWidth?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 20V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v3" /><path d="M8 8h3M8 12h2M4 20h7" /><circle cx="16.5" cy="15.5" r="3.5" /><path d="m21 20-2-2" />
+  </svg>
+);
+
 const NAV = [
   { href: '/', label: 'Painel', icon: Gauge },
   { href: '/monitor', label: 'Monitor Fiscal', icon: Radar },
@@ -18,6 +25,7 @@ const NAV = [
   { href: '/tarefas', label: 'Tarefas', icon: ListChecks },
   { href: '/drive', label: 'Drive', icon: FolderOpen },
   { href: '/clientes', label: 'Clientes', icon: Building2 },
+  { href: '/consulta-cnpj', label: 'Consulta CNPJ', icon: IconeConsulta },
   { href: '/configuracoes', label: 'Configurações', icon: Settings },
 ];
 

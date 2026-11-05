@@ -12,7 +12,7 @@ import { AuthUser, CurrentUser, PERMISSIONS, RequirePermission } from '../../com
 import { PrismaService } from '../../common/prisma.service';
 import { VaultService } from '../../common/vault.service';
 import { ClientCreatedEvent, Events } from '../../common/events';
-import { CnpjService } from '../../integrations/cnpj/cnpj.service';
+import { CnpjController, CnpjService } from '../../integrations/cnpj/cnpj.service';
 import { StorageService } from '../../integrations/storage/storage.service';
 import { relacaoFaturamentoPdf } from '../../integrations/declaracoes/relacao-faturamento';
 import { CertificatesService } from '../../integrations/certificates.service';
@@ -99,6 +99,7 @@ export class ClientsService {
         street: data?.street,
         district: data?.district,
         zipCode: data?.zipCode,
+        stateRegistration: data?.stateRegistration,
         legalRepName: data?.partners?.[0]?.name,
         openedAt: data?.openedAt ? new Date(data.openedAt) : undefined,
         partners: (data?.partners ?? []) as any,
@@ -392,7 +393,7 @@ export class ClientsController {
   async refreshCnpj(@Param('id') id: string) {
     const c = await this.prisma.clientCompany.findFirstOrThrow({ where: { id } });
     const d = await this.cnpj.lookup(c.document);
-    return this.prisma.clientCompany.update({ where: { id }, data: { legalName: d.legalName, tradeName: d.tradeName, legalNature: d.legalNature, cnae: d.cnae, uf: d.uf, city: d.city, ibgeCity: d.ibgeCity, street: d.street, district: d.district, zipCode: d.zipCode, legalRepName: c.legalRepName ?? d.partners[0]?.name, partners: d.partners as any, rawCnpjData: d.raw as any } });
+    return this.prisma.clientCompany.update({ where: { id }, data: { legalName: d.legalName, tradeName: d.tradeName, legalNature: d.legalNature, cnae: d.cnae, uf: d.uf, city: d.city, ibgeCity: d.ibgeCity, street: d.street, district: d.district, zipCode: d.zipCode, stateRegistration: c.stateRegistration ?? d.stateRegistration, legalRepName: c.legalRepName ?? d.partners[0]?.name, partners: d.partners as any, rawCnpjData: d.raw as any } });
   }
 
   // ----- Contatos e responsáveis -----
@@ -463,7 +464,7 @@ export class ClientsController {
 }
 
 @Module({
-  controllers: [ClientsController],
+  controllers: [ClientsController, CnpjController],
   providers: [ClientsService],
   exports: [ClientsService],
 })

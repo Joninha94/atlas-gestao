@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, C, Card, Input, s } from '../components/ui';
 import { OFFICE_CNPJ, Session, api, setSession } from '../lib/api';
 import { notify } from '../lib/hooks';
+import { erroDocumento, formatDocumento, onlyDigits } from '../lib/documentos';
 
 /**
  * Login sem senha: CNPJ/CPF da empresa + e-mail ou WhatsApp cadastrado pelo escritório.
@@ -56,9 +57,10 @@ export default function Login() {
           </View>
           <Card style={{ padding: 18, gap: 14 }}>
             {step === 'id' ? <>
-              <Input label="CNPJ ou CPF da empresa" value={document} onChangeText={setDocument} keyboardType="number-pad" placeholder="00.000.000/0000-00" autoFocus />
+              <Input label="CNPJ ou CPF da empresa" value={document} onChangeText={(t) => setDocument(formatDocumento(t))} keyboardType="number-pad" placeholder="00.000.000/0000-00" maxLength={18} autoFocus />
+              {!!document && onlyDigits(document).length >= 11 && erroDocumento(document, 'auto') && <Text style={{ color: C.red, fontSize: 12 }}>{erroDocumento(document, 'auto')}</Text>}
               <Input label="E-mail ou WhatsApp cadastrado" value={contact} onChangeText={setContact} autoCapitalize="none" keyboardType="email-address" placeholder="voce@empresa.com.br ou (82) 9…" />
-              <Button title="Receber código" icon="send" loading={busy} disabled={!document || !contact} onPress={request} />
+              <Button title="Receber código" icon="send" loading={busy} disabled={!document || !contact || !!erroDocumento(document, 'auto')} onPress={request} />
               <Text style={s.muted}>O acesso é liberado pelo escritório. Não tem cadastro? Fale com a gente pelo WhatsApp.</Text>
             </> : <>
               <Text style={{ color: C.soft }}>Enviamos um código de 6 dígitos para <Text style={{ fontWeight: '600', color: C.ink }}>{contact}</Text>.</Text>

@@ -7,3 +7,4 @@ export * from './communication';
 export * from './reforma';
 export * from './drive';
 export * from './xml';
+export * from './cnpjws';

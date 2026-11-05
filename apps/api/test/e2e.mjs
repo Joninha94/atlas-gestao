@@ -564,6 +564,18 @@ await step('papel timbrado: dados do escritório validados e Relação de Fatura
   await put('/settings/office', { name: st.name, cnpj: st.cnpj, ...Object.fromEntries(Object.entries(st.office).map(([k, v]) => [k, v ?? null])) });
 });
 
+await step('consulta de CNPJ (CNPJ.ws): valida dígitos, devolve resumo + JSON bruto, cadastro usa IE e endereço', async () => {
+  await assert.rejects(get('/cnpj/11444777000162'), /400/);
+  const r = await get(`/cnpj/${ctx.doc}`);
+  assert.ok(['cnpj.ws', 'brasilapi', 'simulado'].includes(r.fonte));
+  assert.ok(r.dados.legalName && r.raw && typeof r.raw === 'object');
+  assert.ok(Array.isArray(r.dados.stateRegistrations));
+  const doc2 = cnpj();
+  const c = await post('/clients', { document: doc2, regime: 'SIMPLES_NACIONAL' });
+  const full = await get(`/clients/${c.id}`);
+  assert.ok(full.street && full.zipCode, 'endereço veio da consulta');
+});
+
 await step('agente local: token, exportar agora, entrega na pasta de importação, revogação', async () => {
   const { spawnSync } = await import('node:child_process');
   const fs = await import('node:fs');
