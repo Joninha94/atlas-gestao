@@ -71,7 +71,10 @@ export async function api<T = any>(path: string, init: RequestInit & { json?: un
   const data = ct.includes('json') ? await res.json() : ct.startsWith('text/') ? await res.text() : await res.blob();
   if (!res.ok) {
     const msg = (data as any)?.message;
-    throw new ApiError(Array.isArray(msg) ? msg.join(', ') : msg ?? `Erro ${res.status}`, res.status, data);
+    const issues: { message: string }[] = Array.isArray((data as any)?.issues) ? (data as any).issues : [];
+    // Erros de validação: mostra o motivo de cada campo (ex.: "CPF do contador inválido.")
+    const text = issues.length ? issues.map((i) => i.message).join(' ') : Array.isArray(msg) ? msg.join(', ') : msg ?? `Erro ${res.status}`;
+    throw new ApiError(text, res.status, data);
   }
   return data as T;
 }

@@ -40,16 +40,19 @@ function Escritorio() {
   const [f, setF] = useState<any>(null);
   const [testTo, setTestTo] = useState('');
   const [o, setO] = useState<any>(null);
-  useEffect(() => { if (data && !o) setO({ cnpj: doc(data.cnpj), ...Object.fromEntries(Object.entries(data.office ?? {}).map(([k, v]) => [k, k === 'zipCode' && v ? String(v).replace(/^(\d{5})(\d{3})$/, '$1-$2') : v ?? ''])) }); }, [data, o]);
+  useEffect(() => { if (data && !o) setO({ cnpj: doc(data.cnpj), ...Object.fromEntries(Object.entries(data.office ?? {}).map(([k, v]) => [k, k === 'zipCode' && v ? String(v).replace(/^(\d{5})(\d{3})$/, '$1-$2') : k === 'accountantCpf' && v ? doc(String(v)) : v ?? ''])) }); }, [data, o]);
   const { busy, run } = useAction();
   useEffect(() => { if (data && !f) setF({ name: data.name, smtpHost: data.smtpHost ?? '', smtpPort: data.smtpPort ?? 587, smtpUser: data.smtpUser ?? '', smtpPass: '', emailFrom: data.emailFrom ?? '', emailSignature: data.emailSignature ?? '', whatsappPhoneId: data.whatsappPhoneId ?? '', whatsappToken: '' }); }, [data, f]);
   if (!data || !f || !o) return <Loading />;
-  const saveOffice = () => run(async () => {
+  /** Um único salvamento: dados do escritório/papel timbrado + e-mail e WhatsApp de disparo. */
+  const save = () => run(async () => {
     const r = await apiPut('/settings/office', { ...o, name: f.name });
+    await apiPut('/settings/dispatch', { ...f, smtpPort: Number(f.smtpPort) || undefined, smtpPass: f.smtpPass || undefined, whatsappToken: f.whatsappToken || undefined, emailFrom: f.emailFrom || undefined });
     if (r.cnpj !== data.cnpj) toast('CNPJ do escritório alterado: use o novo CNPJ no próximo login.');
+    setO(null); setF(null); // recarrega os campos com o que ficou gravado no servidor
     reload();
-  }, 'Dados do escritório salvos.');
-  const save = () => run(() => apiPut('/settings/dispatch', { ...f, smtpPort: Number(f.smtpPort) || undefined, smtpPass: f.smtpPass || undefined, whatsappToken: f.whatsappToken || undefined, emailFrom: f.emailFrom || undefined }).then(reload), 'Configurações salvas.');
+  }, 'Configurações salvas.');
+  const saveOffice = save;
   return (
     <div className="space-y-4">
       {data.sandbox && <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"><b>Modo sandbox:</b> integrações externas (Receita, SEFAZ, WhatsApp, e-mail) estão simuladas. Mensagens vão para a caixa de saída de desenvolvimento.</div>}
@@ -83,7 +86,7 @@ function Escritorio() {
             <div className="text-xs text-ink-muted">IA: {data.aiEnabled ? 'ligada' : 'desligada (configure ANTHROPIC_API_KEY no servidor; até lá usa regras simples)'}</div>
           </div>
         </Card>
-        <Card title="Papel timbrado e declarações" actions={<Button size="sm" disabled={busy} onClick={saveOffice}>Salvar</Button>}>
+        <Card title="Papel timbrado e declarações" actions={<Button size="sm" disabled={busy} onClick={saveOffice}>Salvar tudo</Button>}>
           <div className="space-y-3">
             <p className="text-xs text-ink-muted">Estes dados aparecem no cabeçalho/rodapé do papel timbrado e no bloco do escritório da Relação de Faturamento.</p>
             <div className="grid grid-cols-6 gap-3">
