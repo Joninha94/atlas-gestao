@@ -172,6 +172,30 @@ export class TasksController {
     return this.tasks.clientObligations(u.tenantId, clientId);
   }
 
+  /** Incluir e tirar várias obrigações de uma vez. */
+  @Put('clients/:clientId/obligations')
+  @RequirePermission(PERMISSIONS.TASKS_MANAGE)
+  updateObligations(@CurrentUser() u: AuthUser, @Param('clientId') clientId: string, @Body() body: unknown) {
+    const b = z.object({ add: z.array(z.string().uuid()).default([]), remove: z.array(z.string().uuid()).default([]) }).parse(body);
+    return this.tasks.updateClientObligations(u.tenantId, { sub: u.sub, name: u.name }, clientId, b.add, b.remove);
+  }
+
+  /** Replicar as obrigações deste cliente para outros clientes. */
+  @Post('clients/:clientId/obligations/replicate')
+  @RequirePermission(PERMISSIONS.TASKS_MANAGE)
+  replicate(@CurrentUser() u: AuthUser, @Param('clientId') clientId: string, @Body() body: unknown) {
+    const b = z.object({ targetClientIds: z.array(z.string().uuid()).min(1, 'Escolha pelo menos um cliente'), mode: z.enum(['add', 'replace']).default('add') }).parse(body);
+    return this.tasks.replicateObligations(u.tenantId, { sub: u.sub, name: u.name }, clientId, b.targetClientIds, b.mode);
+  }
+
+  /** Copiar para este cliente as obrigações de outro. */
+  @Post('clients/:clientId/obligations/copy-from')
+  @RequirePermission(PERMISSIONS.TASKS_MANAGE)
+  copyFrom(@CurrentUser() u: AuthUser, @Param('clientId') clientId: string, @Body() body: unknown) {
+    const b = z.object({ sourceClientId: z.string().uuid('Escolha o cliente de origem'), mode: z.enum(['add', 'replace']).default('add') }).parse(body);
+    return this.tasks.replicateObligations(u.tenantId, { sub: u.sub, name: u.name }, b.sourceClientId, [clientId], b.mode);
+  }
+
   @Put('clients/:clientId/obligations/:templateId')
   @RequirePermission(PERMISSIONS.TASKS_MANAGE)
   setObligation(@CurrentUser() u: AuthUser, @Param('clientId') clientId: string, @Param('templateId') templateId: string, @Body() b: { enabled: boolean | null }) {

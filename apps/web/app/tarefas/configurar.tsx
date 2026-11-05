@@ -169,7 +169,7 @@ function Groups({ kind }: { kind: 'client' | 'task' }) {
   const [edit, setEdit] = useState<any>(null);
   const { busy, run } = useAction();
   return (
-    <Card pad={false} title={kind === 'task' ? 'Um modelo de tarefa ligado a um agrupador só é gerado para os clientes marcados com ele.' : 'Use para filtrar clientes e o quadro (ex.: Comércio, Clínicas, VIP).'}
+    <Card pad={false} title={kind === 'task' ? 'Agrupador de tarefas organiza os modelos e entra nas sugestões de obrigações do cliente (aba Obrigações).' : 'Use para filtrar clientes e o quadro (ex.: Comércio, Clínicas, VIP).'}
       actions={<Button size="sm" onClick={() => setEdit({ name: '', color: kind === 'client' ? '#6366f1' : '#1d7871', description: '' })}><Plus size={14} /> Novo</Button>}>
       {!data ? <Loading /> : (
         <Table head={['Nome', ...(kind === 'task' ? ['Modelos', 'Clientes'] : ['Clientes']), '']} empty={!data.length}>
@@ -272,7 +272,6 @@ function Generation() {
       <div className="space-y-3">
         <p className="text-sm text-ink-muted">Todo mês, no dia escolhido abaixo, o sistema gera as tarefas que <b>vencem no mês seguinte</b> (ex.: dia 25/11 gera as tarefas com vencimento em dezembro). O botão "Gerar agora" antecipa.</p>
         <Field label="Dia da geração automática (1 a 28)"><input type="number" min={1} max={28} className="input w-28" value={data.generationDay ?? 25} onChange={(e) => setData({ ...data, generationDay: Math.min(28, Math.max(1, Number(e.target.value) || 25)) })} /></Field>
-        <Toggle k="onClientCreate" title="Gerar as tarefas do mês ao cadastrar um cliente" hint="O cliente novo já entra nas obrigações mensais do seu regime." />
         <Toggle k="notifyClientDefault" title="Avisar o cliente ao concluir (padrão)" hint="E-mail para todos os e-mails cadastrados, WhatsApp e notificação no app. Pode ser desligado por modelo em Tarefas recorrentes → Gerenciar." />
         <div className="flex flex-wrap gap-2 pt-2">
           <Button disabled={busy} onClick={() => run(async () => { setData(await apiPut('/tasks/config/generation', data)); }, 'Configuração salva.')}>Salvar</Button>
@@ -675,7 +674,7 @@ function Adequacy() {
   }, mode === 'add' ? 'Agrupador adicionado.' : 'Agrupador removido.');
   const groups = act.kind === 'task' ? tg : cg;
   return (
-    <Card pad={false} title="Marque nos clientes quais agrupadores de tarefas se aplicam. Modelos ligados a um agrupador só geram tarefas para esses clientes.">
+    <Card pad={false} title="Marque nos clientes os agrupadores. As obrigações de cada cliente são definidas na aba Obrigações do cliente; os agrupadores ajudam nas sugestões.">
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3">
         <input className="input w-64" placeholder="Buscar cliente…" value={q} onChange={(e) => setQ(e.target.value)} />
         <div className="ml-auto flex flex-wrap items-center gap-2">

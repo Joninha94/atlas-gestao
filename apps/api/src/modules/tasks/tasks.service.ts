@@ -53,6 +53,7 @@ export class TasksService {
    */
   async generateForDate(tenantId: string, today = new Date(), holidays?: Set<string>) {
     holidays ??= await this.holidays();
+    await this.ensureExplicitObligations(tenantId);
     let created = 0;
     const daily = await this.withSettings(tenantId, await this.prisma.processTemplate.findMany({
       where: { OR: [{ tenantId }, { tenantId: null }], recurrence: { in: ['DIARIA', 'SEMANAL'] } },
@@ -70,11 +71,12 @@ export class TasksService {
   }
 
   /** Gera as tarefas que vencem no mês `target` (AAAA-MM). Usado no dia 25 e pelo botão "Gerar agora". */
-  async generateForMonth(tenantId: string, target: string, opts: { holidays?: Set<string>; clientIds?: string[]; userName?: string } = {}) {
+  async generateForMonth(tenantId: string, target: string, opts: { holidays?: Set<string>; clientIds?: string[]; templateIds?: string[]; userName?: string } = {}) {
     if (!/^\d{4}-\d{2}$/.test(target)) throw new BadRequestException('Mês no formato AAAA-MM.');
+    await this.ensureExplicitObligations(tenantId);
     const holidays = opts.holidays ?? (await this.holidays());
     const templates = await this.withSettings(tenantId, await this.prisma.processTemplate.findMany({
-      where: { OR: [{ tenantId }, { tenantId: null }], recurrence: { in: ['MENSAL', 'TRIMESTRAL', 'SEMESTRAL', 'ANUAL'] } },
+      where: { OR: [{ tenantId }, { tenantId: null }], recurrence: { in: ['MENSAL', 'TRIMESTRAL', 'SEMESTRAL', 'ANUAL'] }, ...(opts.templateIds ? { id: { in: opts.templateIds } } : {}) },
       include: { steps: { orderBy: { order: 'asc' } } },
     }));
     // Modelo do escritório com o mesmo nome substitui o global
@@ -236,55 +238,149 @@ export class TasksService {
   // ---------------------------------------------------------------------------
   // Obrigações por cliente: o padrão vem do modelo (regime, UF, opcional); o ajuste fino é por cliente.
   // ---------------------------------------------------------------------------
+  /**
+   * Conversão única para "obrigações definidas pelo usuário": os clientes que já existiam ficam com as
+   * obrigações que valiam para eles (regime/UF + ajustes manuais), agora gravadas explicitamente.
+   */
+  private explicitDone = new Set<string>();
+  async ensureExplicitObligations(tenantId: string, exceptClientId?: string) {
+    if (this.explicitDone.has(tenantId)) return;
+    const t = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { taskSettings: true } });
+    const ts = (t?.taskSettings as Record<string, unknown> | null) ?? {};
+    if (!ts.obligationsExplicitAt) {
+      const templates = await this.withSettings(tenantId, await this.prisma.processTemplate.findMany({ where: { OR: [{ tenantId }, { tenantId: null }], recurrence: { not: 'NENHUMA' } } }));
+      const own = new Set(templates.filter((x) => x.tenantId).map((x) => x.name));
+      const valid = templates.filter((x) => x.tenantId || !own.has(x.name));
+      const clients = await this.prisma.clientCompany.findMany({ where: { tenantId, ...(exceptClientId ? { id: { not: exceptClientId } } : {}) }, include: { obligationRules: true } });
+      for (const c of clients) {
+        for (const tp of valid) {
+          const rule = c.obligationRules.find((r) => r.templateId === tp.id);
+          const on = rule ? rule.enabled : templateSuggested(tp, c);
+          if (on && !rule?.enabled) await this.prisma.clientObligation.upsert({ where: { clientId_templateId: { clientId: c.id, templateId: tp.id } }, create: { tenantId, clientId: c.id, templateId: tp.id, enabled: true }, update: { enabled: true } });
+        }
+      }
+      await this.prisma.clientObligation.deleteMany({ where: { tenantId, enabled: false } });
+      await this.prisma.tenant.update({ where: { id: tenantId }, data: { taskSettings: { ...ts, obligationsExplicitAt: new Date().toISOString() } } });
+    }
+    this.explicitDone.add(tenantId);
+  }
+
+  /** Obrigações do cliente: as que ele tem (com os próximos vencimentos) e as disponíveis para incluir. */
   async clientObligations(tenantId: string, clientId: string) {
+    await this.ensureExplicitObligations(tenantId);
     const client = await this.prisma.clientCompany.findFirstOrThrow({ where: { id: clientId, tenantId }, include: { obligationRules: true } });
-    const [templates, departments, open] = await Promise.all([
+    const [templates, departments, open, hol] = await Promise.all([
       this.prisma.processTemplate.findMany({ where: { OR: [{ tenantId }, { tenantId: null }], recurrence: { not: 'NENHUMA' } }, orderBy: [{ category: 'asc' }, { name: 'asc' }] }).then((r) => this.withSettings(tenantId, r)),
       this.prisma.department.findMany({ select: { id: true, name: true } }),
-      this.prisma.process.groupBy({ by: ['templateId'], where: { clientId, status: { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA'] } }, _count: true }),
+      this.prisma.process.groupBy({ by: ['templateId'], where: { clientId, status: { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA', 'IMPEDIMENTO'] } }, _count: true }),
+      this.holidays(),
     ]);
-    // Modelo do escritório com o mesmo nome substitui o global
     const own = new Set(templates.filter((t) => t.tenantId).map((t) => t.name));
+    const now = new Date();
     return templates
       .filter((t) => t.tenantId || !own.has(t.name))
       .map((t) => {
-        const rule = client.obligationRules.find((r) => r.templateId === t.id);
-        const byDefault = templateApplies(t, { ...client, obligationRules: [] });
-        const reason = rule ? 'Ajuste manual' : t.groupId && !client.taskGroupIds.includes(t.groupId) ? 'Agrupador de tarefas não marcado no cliente' : t.optIn ? 'Opcional: ative se a empresa tiver' : t.regimes.length && !t.regimes.includes(client.regime) ? 'Não se aplica ao regime'
-          : t.ufs.length && !(client.uf && t.ufs.includes(client.uf)) ? `Só para ${t.ufs.join(', ')}` : 'Padrão do regime';
+        const applies = templateApplies(t, client);
+        const suggested = templateSuggested(t, client);
         return {
           templateId: t.id, name: t.name, category: t.category, department: departments.find((d) => d.id === t.departmentId)?.name ?? null,
           recurrence: t.recurrence, deadline: describeDeadline(t), generatesFine: t.generatesFine, notes: t.notes, own: !!t.tenantId,
-          byDefault, rule: rule ? rule.enabled : null, applies: rule ? rule.enabled : byDefault, reason,
+          applies, suggested, since: client.obligationRules.find((r) => r.templateId === t.id)?.updatedAt ?? null,
+          reason: suggested ? 'Sugerida para o regime' : t.optIn ? 'Opcional (só se a empresa tiver)' : t.regimes.length && !t.regimes.includes(client.regime) ? 'Outro regime' : t.ufs.length ? `Só para ${t.ufs.join(', ')}` : '',
           openProcesses: open.find((o) => o.templateId === t.id)?._count ?? 0,
+          next: applies ? this.nextDueDates(t, now, hol, 3) : [],
         };
       });
   }
 
-  /** enabled = null volta ao padrão do modelo. Ao ativar uma obrigação mensal, já cria o processo da competência atual. */
-  async setClientObligation(tenantId: string, userId: string, clientId: string, templateId: string, enabled: boolean | null) {
-    const client = await this.prisma.clientCompany.findFirstOrThrow({ where: { id: clientId, tenantId }, include: { responsibles: true } });
-    const [t] = await this.withSettings(tenantId, [await this.prisma.processTemplate.findFirstOrThrow({ where: { id: templateId, OR: [{ tenantId }, { tenantId: null }] }, include: { steps: { orderBy: { order: 'asc' } } } })]);
-    if (enabled === null) await this.prisma.clientObligation.deleteMany({ where: { clientId, templateId } });
-    else await this.prisma.clientObligation.upsert({ where: { clientId_templateId: { clientId, templateId } }, create: { tenantId, clientId, templateId, enabled }, update: { enabled } });
-    await this.prisma.auditLog.create({ data: { tenantId, userId, clientId, action: 'obrigacao.ajuste', entity: 'ProcessTemplate', entityId: templateId, meta: { enabled } } });
-    const rules = await this.prisma.clientObligation.findMany({ where: { clientId } });
-    const applies = templateApplies(t, { ...client, obligationRules: rules });
-    let created = null;
-    if (applies && t.recurrence === 'MENSAL') created = await this.createProcess(tenantId, t, client, competenceForRun(new Date()), await this.holidays());
-    return { applies, createdProcessId: created?.id ?? null };
+  /** Planejamento: próximos vencimentos do modelo a partir de hoje (até 24 meses à frente). */
+  nextDueDates(t: any, from: Date, holidays: Set<string>, n: number) {
+    const out: { competence: string; dueDate: string }[] = [];
+    const start = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
+    const timing = { recurrence: t.recurrence as Recurrence, dueDay: t.dueDay, dueMonthOffset: t.dueMonthOffset, recurrenceMonth: t.recurrenceMonth, dueSameYear: t.dueSameYear };
+    for (let i = 0; i < 24 && out.length < n; i++) {
+      const d = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i, 1));
+      const target = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      for (const c of competencesDueInMonth(timing, target)) {
+        const due = dueDateForTemplate(t, c, holidays);
+        if (due >= new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()))) out.push({ competence: c, dueDate: due.toISOString() });
+      }
+    }
+    return out.slice(0, n);
   }
 
-  /** Cliente novo entra já nos processos mensais do mês corrente do seu regime. */
+  /**
+   * Incluir/tirar obrigações do cliente. Ao incluir, já gera as tarefas que vencem no mês corrente
+   * (e no seguinte, se já passou do dia de geração); os demais meses entram no planejamento automático.
+   * Ao tirar, apaga as tarefas abertas daquela obrigação que ainda não foram começadas.
+   */
+  async updateClientObligations(tenantId: string, user: { sub: string; name?: string }, clientId: string, add: string[], remove: string[]) {
+    await this.ensureExplicitObligations(tenantId);
+    const client = await this.prisma.clientCompany.findFirstOrThrow({ where: { id: clientId, tenantId } });
+    const valid = await this.prisma.processTemplate.findMany({ where: { id: { in: [...add, ...remove] }, OR: [{ tenantId }, { tenantId: null }] }, select: { id: true, name: true } });
+    const ok = (id: string) => valid.some((v) => v.id === id);
+    for (const templateId of add.filter(ok)) {
+      await this.prisma.clientObligation.upsert({ where: { clientId_templateId: { clientId, templateId } }, create: { tenantId, clientId, templateId, enabled: true }, update: { enabled: true } });
+    }
+    let removedTasks = 0;
+    for (const templateId of remove.filter(ok)) {
+      await this.prisma.clientObligation.deleteMany({ where: { clientId, templateId } });
+      const open = await this.prisma.process.findMany({ where: { tenantId, clientId, templateId, status: 'A_FAZER' }, include: { tasks: true, files: true } });
+      for (const p of open) {
+        const touched = p.files.length || p.tasks.some((x) => x.done) || Object.keys((p.popChecks as object) ?? {}).length;
+        if (touched) continue;
+        try {
+          await this.prisma.$transaction([
+            this.prisma.taskAttachment.deleteMany({ where: { task: { processId: p.id } } }),
+            this.prisma.processTask.deleteMany({ where: { processId: p.id } }),
+            this.prisma.taskComment.deleteMany({ where: { processId: p.id } }),
+            this.prisma.processEvent.deleteMany({ where: { processId: p.id } }),
+            this.prisma.process.delete({ where: { id: p.id } }),
+          ]);
+        } catch {
+          // ligada a outro registro (ex.: ordem de serviço): fica desconsiderada, com o motivo
+          await this.prisma.process.update({ where: { id: p.id }, data: { status: 'DISPENSADO', dismissReason: 'Obrigação retirada do cliente', dismissedAt: new Date(), dismissedById: user.sub } });
+        }
+        removedTasks++;
+      }
+    }
+    let created = 0;
+    if (add.length) {
+      const now = new Date();
+      const ids = add.filter(ok);
+      created += (await this.generateForMonth(tenantId, now.toISOString().slice(0, 7), { clientIds: [clientId], templateIds: ids })).created;
+      if (now.getUTCDate() >= (await this.generationDay(tenantId))) created += (await this.generateForMonth(tenantId, nextMonth(now), { clientIds: [clientId], templateIds: ids })).created;
+    }
+    const names = (ids: string[]) => valid.filter((v) => ids.includes(v.id)).map((v) => v.name).join(', ');
+    await this.prisma.auditLog.create({ data: { tenantId, userId: user.sub, clientId, action: 'obrigacoes.alterar', entity: 'ClientCompany', entityId: clientId, meta: { incluidas: names(add), retiradas: names(remove), created, removedTasks } } });
+    return { added: add.filter(ok).length, removed: remove.filter(ok).length, createdTasks: created, removedTasks, client: client.legalName };
+  }
+
+  /** compat: ligar/desligar uma obrigação (null = tirar). */
+  async setClientObligation(tenantId: string, userId: string, clientId: string, templateId: string, enabled: boolean | null) {
+    const r = await this.updateClientObligations(tenantId, { sub: userId }, clientId, enabled ? [templateId] : [], enabled ? [] : [templateId]);
+    return { applies: !!enabled, ...r };
+  }
+
+  /** Replicar as obrigações deste cliente para outros. `replace` deixa os destinos exatamente iguais. */
+  async replicateObligations(tenantId: string, user: { sub: string; name?: string }, sourceId: string, targetIds: string[], mode: 'add' | 'replace') {
+    await this.ensureExplicitObligations(tenantId);
+    const src = (await this.prisma.clientObligation.findMany({ where: { tenantId, clientId: sourceId, enabled: true } })).map((r) => r.templateId);
+    const results = [];
+    for (const target of targetIds.filter((x) => x !== sourceId)) {
+      const cur = (await this.prisma.clientObligation.findMany({ where: { tenantId, clientId: target, enabled: true } })).map((r) => r.templateId);
+      const add = src.filter((x) => !cur.includes(x));
+      const remove = mode === 'replace' ? cur.filter((x) => !src.includes(x)) : [];
+      results.push(await this.updateClientObligations(tenantId, user, target, add, remove));
+    }
+    return { clients: results.length, added: results.reduce((a, r) => a + r.added, 0), removed: results.reduce((a, r) => a + r.removed, 0), createdTasks: results.reduce((a, r) => a + r.createdTasks, 0), results };
+  }
+
+  /** Cliente novo começa sem obrigações: o usuário define na aba Obrigações (ou copia de outro cliente). */
   @OnEvent(Events.CLIENT_CREATED)
   async onClientCreated(e: ClientCreatedEvent) {
-    const gen = ((await this.prisma.tenant.findUnique({ where: { id: e.tenantId }, select: { taskSettings: true } }))?.taskSettings as any) ?? {};
-    if (gen.onClientCreate === false) return 0;
-    // Cliente novo: tarefas que vencem neste mês e, se já passou do dia de geração, as do mês seguinte
-    const now = new Date();
-    let created = (await this.generateForMonth(e.tenantId, now.toISOString().slice(0, 7), { clientIds: [e.clientId] })).created;
-    if (now.getUTCDate() >= (await this.generationDay(e.tenantId))) created += (await this.generateForMonth(e.tenantId, nextMonth(now), { clientIds: [e.clientId] })).created;
-    return created;
+    await this.ensureExplicitObligations(e.tenantId, e.clientId).catch(() => undefined);
+    return 0;
   }
 
   // ---------------------------------------------------------------------------
@@ -804,16 +900,24 @@ export function assertOpen(status: string, allowImpediment = false) {
 }
 
 /**
- * O modelo vale para o cliente? Ordem: ajuste manual do cliente > agrupador de tarefas > modelo "optIn" > regime > UF.
- * Ex.: "Folha de pagamento" desligada para empresa sem empregados; "DIMOB" ligada só para imobiliárias.
+ * O modelo vale para o cliente? Só quando o escritório incluiu a obrigação no cliente (aba Obrigações).
+ * Cadastro novo começa sem obrigações: o usuário define quais o cliente tem.
  */
 export function templateApplies(
-  t: { id: string; regimes: string[]; ufs?: string[] | null; optIn?: boolean | null; groupId?: string | null },
-  client: { regime: string; uf?: string | null; taskGroupIds?: string[] | null; obligationRules?: { templateId: string; enabled: boolean }[] },
+  t: { id: string },
+  client: { obligationRules?: { templateId: string; enabled: boolean }[] },
 ): boolean {
-  const rule = client.obligationRules?.find((r) => r.templateId === t.id);
-  if (rule) return rule.enabled;
-  // Agrupador de tarefas: modelo com agrupador só vale para clientes marcados com ele (adequação)
+  return client.obligationRules?.some((r) => r.templateId === t.id && r.enabled) ?? false;
+}
+
+/**
+ * Sugestão (não automática): o modelo costuma valer para este cliente? Regime > UF > "optIn".
+ * Usado para o botão "Adicionar sugeridas" e na conversão dos clientes antigos.
+ */
+export function templateSuggested(
+  t: { regimes: string[]; ufs?: string[] | null; optIn?: boolean | null; groupId?: string | null },
+  client: { regime: string; uf?: string | null; taskGroupIds?: string[] | null },
+): boolean {
   if (t.groupId && !(client.taskGroupIds ?? []).includes(t.groupId)) return false;
   if (t.optIn) return false;
   if (t.regimes.length && !t.regimes.includes(client.regime)) return false;

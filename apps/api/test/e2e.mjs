@@ -146,8 +146,17 @@ await step('cadastro de cliente Simples pelo CNPJ: dados automáticos, pastas do
   assert.match(c.legalName, /Empresa Exemplo/);
   const folders = await get(`/drive/folders?clientId=${c.id}`);
   assert.ok(folders.some((f) => f.kind === 'CLIENTE_RAIZ'));
+  // Cadastro novo começa sem obrigações: o usuário define (aqui, as sugeridas para o regime)
+  assert.ok(!(await get(`/tasks/processes?competence=${comp}`)).some((p) => p.clientId === c.id), 'nada gerado automaticamente');
+  const obs = await get(`/tasks/clients/${c.id}/obligations`);
+  assert.ok(obs.every((o) => !o.applies), 'sem obrigações no cadastro');
+  const sug = obs.filter((o) => o.suggested).map((o) => o.templateId);
+  assert.ok(sug.length >= 5);
+  const add = await put(`/tasks/clients/${c.id}/obligations`, { add: sug });
+  assert.ok(add.createdTasks >= 1, 'tarefas do mês corrente geradas ao incluir');
   const procs = await get(`/tasks/processes?competence=${comp}`);
   assert.ok(procs.some((p) => p.clientId === c.id && p.title === 'PGDAS-D e DAS'), 'processo PGDAS-D criado para o cliente');
+  assert.ok((await get(`/tasks/clients/${c.id}/obligations`)).find((o) => o.name === 'PGDAS-D e DAS').next.length >= 2, 'planejamento dos próximos vencimentos');
   await assert.rejects(post('/clients', { document: ctx.doc, regime: 'MEI' }), /409/);
   await assert.rejects(post('/clients', { document: '11111111111111', regime: 'MEI' }), /400/);
 });
@@ -155,6 +164,7 @@ await step('cadastro de cliente Simples pelo CNPJ: dados automáticos, pastas do
 await step('cliente MEI e procuração e-CAC verificada', async () => {
   const m = await post('/clients', { document: cnpj(), regime: 'MEI', contacts: [{ name: 'João MEI', email: 'joao@mei.com', receives: ['EMAIL'] }] });
   ctx.meiId = m.id;
+  await put(`/tasks/clients/${m.id}/obligations`, { add: (await get(`/tasks/clients/${m.id}/obligations`)).filter((o) => o.suggested).map((o) => o.templateId) });
   const poa = await post(`/clients/${ctx.clientId}/power-of-attorney/check`);
   assert.equal(poa.ok, true);
 });
@@ -503,28 +513,36 @@ await step('isolamento (RLS): outro escritório não vê nada do primeiro', asyn
 });
 
 // ---------------------------------------------------------------- Agente local e falhas de job
-await step('obrigações por cliente: padrão do regime, ativar opcional cria a tarefa, desativar e voltar ao padrão', async () => {
+await step('obrigações por cliente: incluir, tirar e replicar para outros clientes', async () => {
   const list = await get(`/tasks/clients/${ctx.clientId}/obligations`);
   assert.ok(list.length >= 60, `catálogo com ${list.length} modelos`);
   const pgdas = list.find((o) => o.name === 'PGDAS-D e DAS');
   assert.equal(pgdas.applies, true);
   assert.match(pgdas.deadline, /dia 20 do mês seguinte/);
-  assert.equal(list.find((o) => o.name === 'ECF').applies, false); // Lucro Presumido/Real, não Simples
-  // Opcional mensal: ativar já cria o processo da competência
+  const ecf = list.find((o) => o.name === 'ECF');
+  assert.equal(ecf.applies, false);
+  assert.equal(ecf.suggested, false); // Lucro Presumido/Real, não Simples
+  // Incluir uma opcional
   const vt = list.find((o) => o.name === 'Vale-transporte e benefícios (pedido)');
   assert.equal(vt.applies, false);
   const r = await put(`/tasks/clients/${ctx.clientId}/obligations/${vt.templateId}`, { enabled: true });
   assert.equal(r.applies, true);
-  assert.ok(r.createdProcessId);
-  // Desligar uma do padrão e voltar ao padrão
-  await put(`/tasks/clients/${ctx.clientId}/obligations/${pgdas.templateId}`, { enabled: false });
+  // Tirar e incluir de novo
+  await put(`/tasks/clients/${ctx.clientId}/obligations`, { remove: [ecf.templateId, vt.templateId] });
   let after = await get(`/tasks/clients/${ctx.clientId}/obligations`);
-  assert.equal(after.find((o) => o.templateId === pgdas.templateId).applies, false);
-  assert.equal(after.find((o) => o.templateId === pgdas.templateId).reason, 'Ajuste manual');
-  await put(`/tasks/clients/${ctx.clientId}/obligations/${pgdas.templateId}`, { enabled: null });
-  after = await get(`/tasks/clients/${ctx.clientId}/obligations`);
-  assert.equal(after.find((o) => o.templateId === pgdas.templateId).applies, true);
-  await assert.rejects(put(`/tasks/clients/${ctx.clientId}/obligations/${pgdas.templateId}`, { enabled: 'sim' }), /400/);
+  assert.equal(after.find((o) => o.templateId === vt.templateId).applies, false);
+  await put(`/tasks/clients/${ctx.clientId}/obligations`, { add: [vt.templateId] });
+  // Replicar para outro cliente (substituir) e copiar de volta
+  const other = await post('/clients', { document: cnpj(), regime: 'LUCRO_PRESUMIDO' });
+  const rep = await post(`/tasks/clients/${ctx.clientId}/obligations/replicate`, { targetClientIds: [other.id], mode: 'replace' });
+  assert.equal(rep.clients, 1);
+  const a1 = (await get(`/tasks/clients/${ctx.clientId}/obligations`)).filter((o) => o.applies).map((o) => o.templateId).sort();
+  const a2 = (await get(`/tasks/clients/${other.id}/obligations`)).filter((o) => o.applies).map((o) => o.templateId).sort();
+  assert.deepEqual(a2, a1, 'mesmas obrigações no destino');
+  const empty = await post('/clients', { document: cnpj(), regime: 'SIMPLES_NACIONAL' });
+  await post(`/tasks/clients/${empty.id}/obligations/copy-from`, { sourceClientId: ctx.clientId });
+  assert.equal((await get(`/tasks/clients/${empty.id}/obligations`)).filter((o) => o.applies).length, a1.length);
+  await assert.rejects(put(`/tasks/clients/${ctx.clientId}/obligations`, { add: ['x'] }), /400/);
   // Modelos trazem prazo descrito e regras novas
   const tpl = await get('/tasks/templates');
   const efd = tpl.find((t) => t.name === 'EFD-Contribuições');
@@ -770,11 +788,10 @@ await step('Configurar tarefas: fluxo encadeado, quadro, agrupadores e documento
   const orig = (await get('/tasks/config/template-settings')).find((t) => t.id === das.id);
   await put(`/tasks/config/template-settings/${das.id}`, { popId: orig.popId, groupId: g.id, notifyClient: orig.notifyClient });
   let ob = (await get(`/tasks/clients/${ctx.clientId}/obligations`)).find((o) => o.templateId === das.id);
-  assert.equal(ob.byDefault, false);
-  assert.match(ob.reason, /Agrupador/);
+  assert.equal(ob.suggested, false);
   await put('/tasks/config/clients/groups', { clientIds: [ctx.clientId], kind: 'task', add: [g.id] });
   ob = (await get(`/tasks/clients/${ctx.clientId}/obligations`)).find((o) => o.templateId === das.id);
-  assert.equal(ob.byDefault, true);
+  assert.equal(ob.suggested, true);
   await put(`/tasks/config/template-settings/${das.id}`, { popId: orig.popId, groupId: null, notifyClient: orig.notifyClient });
   await call('DELETE', `/tasks/config/task-groups/${g.id}`);
 

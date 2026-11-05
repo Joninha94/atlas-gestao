@@ -1,19 +1,21 @@
 'use client';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FileSignature, KeyRound, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiDelete, apiPost, apiPut, download } from '../../../lib/api';
 import { useAction, useApi } from '../../../lib/hooks';
 import { brl, competence, date, dateTime, doc, label } from '../../../lib/format';
-import { Badge, Bar as Meter, Button, Card, Field, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Table, Tabs, MonthInput } from '../../../components/ui';
+import { Badge, Bar as Meter, Button, Card, Field, Loading, Modal, PageHeader, SearchInput, Select, Stat, StatusBadge, Table, Tabs, MonthInput } from '../../../components/ui';
+import clsx from 'clsx';
 
 type Tab = 'checkup' | 'dados' | 'contatos' | 'certificado' | 'app' | 'historico' | 'obrigacoes';
 
 export default function ClienteDetalhe() {
   const { id } = useParams<{ id: string }>();
   const [tab, setTab] = useState<Tab>('checkup');
+  useEffect(() => { const t = new URLSearchParams(window.location.search).get('tab') as Tab | null; if (t) setTab(t); }, []);
   const { data: c, reload } = useApi<any>(`/clients/${id}`);
   const { busy, run } = useAction();
   const [fat, setFat] = useState<string | null>(null);
@@ -38,7 +40,7 @@ export default function ClienteDetalhe() {
       {tab === 'checkup' && <Checkup id={id} />}
       {tab === 'dados' && <Dados c={c} reload={reload} />}
       {tab === 'contatos' && <Contatos c={c} reload={reload} />}
-      {tab === 'obrigacoes' && <Obrigacoes id={id} />}
+      {tab === 'obrigacoes' && <Obrigacoes id={id} regime={c.regime} />}
       {tab === 'certificado' && <Certificado c={c} reload={reload} />}
       {tab === 'app' && <AppConfig id={id} />}
       {tab === 'historico' && <Historico id={id} />}
@@ -273,64 +275,183 @@ function Historico({ id }: { id: string }) {
  * Quais obrigações viram tarefa para este cliente. O padrão vem do regime/UF do modelo;
  * aqui o time liga o que é opcional (IPI, DIMOB, DMED…) e desliga o que não se aplica.
  */
-function Obrigacoes({ id }: { id: string }) {
+const REGIME_NOME: Record<string, string> = { MEI: 'MEI', SIMPLES_NACIONAL: 'Simples Nacional', LUCRO_PRESUMIDO: 'Lucro Presumido', LUCRO_REAL: 'Lucro Real', IMUNE_ISENTA: 'Imune/Isenta', PESSOA_FISICA: 'Pessoa Física' };
+
+/**
+ * Obrigações do cliente: o usuário define quais atividades o cliente tem (nada entra sozinho no cadastro).
+ * Incluir já gera as tarefas do mês corrente; os próximos meses entram no planejamento (geração do dia 25).
+ */
+function Obrigacoes({ id, regime }: { id: string; regime?: string }) {
   const { data, reload } = useApi<any[]>(`/tasks/clients/${id}/obligations`);
   const { busy, run } = useAction();
-  const [filter, setFilter] = useState<'ativas' | 'todas' | 'opcionais'>('ativas');
   const [q, setQ] = useState('');
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState(false);
+  const [replicate, setReplicate] = useState(false);
+  const [copyFrom, setCopyFrom] = useState(false);
   if (!data) return <Loading />;
-  const set = (o: any, enabled: boolean | null) => run(async () => {
-    const r = await apiPut(`/tasks/clients/${id}/obligations/${o.templateId}`, { enabled });
-    reload();
+  const active = data.filter((o) => o.applies);
+  const suggestedMissing = data.filter((o) => o.suggested && !o.applies);
+  const change = (add: string[], remove: string[], ok: string) => run(async () => {
+    const r = await apiPut<any>(`/tasks/clients/${id}/obligations`, { add, remove });
+    setSel(new Set()); reload();
     return r;
-  }, enabled === null ? 'Voltou ao padrão do regime.' : enabled ? 'Obrigação ativada. Se for mensal, a tarefa desta competência já foi criada.' : 'Obrigação desativada para este cliente.');
-  const rows = data
-    .filter((o) => (filter === 'ativas' ? o.applies : filter === 'opcionais' ? !o.applies : true))
-    .filter((o) => !q || `${o.name} ${o.category}`.toLowerCase().includes(q.toLowerCase()));
+  }, ok);
+  const rows = active.filter((o) => !q || `${o.name} ${o.category}`.toLowerCase().includes(q.toLowerCase()));
   const groups = rows.reduce<Record<string, any[]>>((acc, o) => ((acc[o.category ?? 'Outras'] ??= []).push(o), acc), {});
-  const ativas = data.filter((o) => o.applies).length;
-  const ajustes = data.filter((o) => o.rule !== null).length;
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Obrigações ativas" value={ativas} tone="green" />
-        <Stat label="Disponíveis no catálogo" value={data.length} />
-        <Stat label="Ajustes manuais" value={ajustes} />
-        <Stat label="Com tarefa em aberto" value={data.filter((o) => o.openProcesses > 0).length} />
+        <Stat label="Obrigações do cliente" value={active.length} tone={active.length ? 'green' : 'amber'} />
+        <Stat label="Com tarefa em aberto" value={active.filter((o) => o.openProcesses > 0).length} />
+        <Stat label="Sugeridas que faltam" value={suggestedMissing.length} hint={regime ? REGIME_NOME[regime] : undefined} />
+        <Stat label="Catálogo" value={data.length} />
       </div>
+
       <Card pad={false}>
         <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3">
-          <Select value={filter} onChange={(v) => setFilter(v as any)} options={[{ value: 'ativas', label: 'Ativas para o cliente' }, { value: 'opcionais', label: 'Não ativas (ativar)' }, { value: 'todas', label: 'Todas' }]} />
-          <input className="input w-64" placeholder="Buscar obrigação" value={q} onChange={(e) => setQ(e.target.value)} />
-          <span className="ml-auto text-xs text-ink-muted">Prazos já ajustados para dia útil e feriados cadastrados.</span>
+          <SearchInput className="w-full sm:w-64" value={q} onChange={setQ} placeholder="Buscar obrigação do cliente" />
+          <div className="ml-auto flex flex-wrap gap-2">
+            {sel.size > 0 && <Button size="sm" variant="danger" disabled={busy} onClick={() => confirm(`Tirar ${sel.size} obrigação(ões) deste cliente? As tarefas abertas que ainda não foram começadas também saem.`) && change([], [...sel], 'Obrigações retiradas do cliente.')}>Tirar {sel.size}</Button>}
+            <Button size="sm" onClick={() => setAdding(true)}>+ Incluir atividades</Button>
+            <Button size="sm" variant="secondary" onClick={() => setCopyFrom(true)}>Copiar de outro cliente</Button>
+            <Button size="sm" variant="secondary" disabled={!active.length} onClick={() => setReplicate(true)}>Replicar para clientes</Button>
+          </div>
         </div>
-        {Object.keys(groups).length === 0 && <p className="p-6 text-center text-sm text-ink-muted">Nada por aqui.</p>}
+
+        {active.length === 0 ? (
+          <div className="p-8 text-center">
+            <div className="text-base font-semibold">Este cliente ainda não tem obrigações</div>
+            <p className="mx-auto mt-1 max-w-xl text-sm text-ink-muted">Escolha as atividades que o escritório faz para ele. Ao incluir, as tarefas que vencem neste mês já são geradas e os próximos meses ficam planejados (geração automática todo dia 25).</p>
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              {suggestedMissing.length > 0 && <Button disabled={busy} onClick={() => change(suggestedMissing.map((o) => o.templateId), [], 'Obrigações sugeridas incluídas. As tarefas do mês já foram geradas.')}>Incluir as {suggestedMissing.length} sugeridas para {REGIME_NOME[regime ?? ''] ?? 'o regime'}</Button>}
+              <Button variant="secondary" onClick={() => setAdding(true)}>Escolher atividades</Button>
+              <Button variant="secondary" onClick={() => setCopyFrom(true)}>Copiar de outro cliente</Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {Object.entries(groups).map(([cat, list]) => (
+              <div key={cat}>
+                <div className="bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">{cat}</div>
+                <Table head={[<input key="all" type="checkbox" aria-label={`Selecionar ${cat}`} checked={list.every((o) => sel.has(o.templateId))} onChange={(e) => { const n = new Set(sel); list.forEach((o) => (e.target.checked ? n.add(o.templateId) : n.delete(o.templateId))); setSel(n); }} />, 'Atividade', 'Prazo', 'Próximos vencimentos', 'Setor', '']}>
+                  {list.map((o) => (
+                    <tr key={o.templateId} className="hover:bg-slate-50/60">
+                      <td className="td w-8"><input type="checkbox" aria-label={`Selecionar ${o.name}`} checked={sel.has(o.templateId)} onChange={() => { const n = new Set(sel); n.has(o.templateId) ? n.delete(o.templateId) : n.add(o.templateId); setSel(n); }} /></td>
+                      <td className="td">
+                        <div className="font-medium">{o.name} {o.generatesFine && <Badge tone="red">multa</Badge>} {o.own && <Badge tone="violet">do escritório</Badge>}</div>
+                        {o.openProcesses > 0 && <div className="text-xs text-brand-700">{o.openProcesses} tarefa(s) em aberto</div>}
+                      </td>
+                      <td className="td whitespace-nowrap text-sm">{o.deadline}</td>
+                      <td className="td text-sm">{o.next?.length ? <div className="flex flex-wrap gap-1">{o.next.map((n: any, i: number) => <span key={n.dueDate} className={clsx('rounded px-1.5 py-0.5 text-xs tabular-nums', i === 0 ? 'bg-brand-50 font-medium text-brand-800' : 'bg-slate-100 text-ink-muted')} title={`Competência ${competence(n.competence)}`}>{date(n.dueDate)}</span>)}</div> : <span className="text-xs text-ink-muted">—</span>}</td>
+                      <td className="td text-sm">{o.department ?? '—'}</td>
+                      <td className="td whitespace-nowrap text-right"><Button size="sm" variant="ghost" disabled={busy} onClick={() => confirm(`Tirar "${o.name}" deste cliente?`) && change([], [o.templateId], 'Obrigação retirada do cliente.')}>Tirar</Button></td>
+                    </tr>
+                  ))}
+                </Table>
+              </div>
+            ))}
+            {!rows.length && <p className="p-6 text-center text-sm text-ink-muted">Nenhuma obrigação com "{q}".</p>}
+          </>
+        )}
+      </Card>
+
+      {adding && <IncluirAtividades data={data} regime={regime} onClose={() => setAdding(false)} onAdd={(ids) => change(ids, [], `${ids.length} atividade(s) incluída(s). As tarefas do mês já foram geradas.`).then(() => setAdding(false))} busy={busy} />}
+      {replicate && <ReplicarObrigacoes id={id} count={active.length} onClose={() => setReplicate(false)} />}
+      {copyFrom && <CopiarDeCliente id={id} onClose={() => setCopyFrom(false)} onDone={() => { setCopyFrom(false); reload(); }} />}
+    </div>
+  );
+}
+
+function IncluirAtividades({ data, regime, onClose, onAdd, busy }: { data: any[]; regime?: string; onClose: () => void; onAdd: (ids: string[]) => void; busy: boolean }) {
+  const avail = data.filter((o) => !o.applies);
+  const [q, setQ] = useState('');
+  const [onlySug, setOnlySug] = useState(avail.some((o) => o.suggested));
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const rows = avail.filter((o) => (!onlySug || o.suggested) && (!q || `${o.name} ${o.category}`.toLowerCase().includes(q.toLowerCase())));
+  const groups = rows.reduce<Record<string, any[]>>((acc, o) => ((acc[o.category ?? 'Outras'] ??= []).push(o), acc), {});
+  const toggle = (id: string) => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); setSel(n); };
+  return (
+    <Modal wide open title="Incluir atividades no cliente" onClose={onClose}
+      footer={<><span className="mr-auto text-xs text-ink-muted">{sel.size} selecionada(s)</span><Button variant="ghost" onClick={onClose}>Cancelar</Button><Button disabled={busy || !sel.size} onClick={() => onAdd([...sel])}>Incluir {sel.size || ''}</Button></>}>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <SearchInput className="w-full sm:w-72" value={q} onChange={setQ} placeholder="Buscar no catálogo (ex.: DCTFWeb)" autoFocus />
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={onlySug} onChange={(e) => setOnlySug(e.target.checked)} /> Só as sugeridas para {REGIME_NOME[regime ?? ''] ?? 'o regime'}</label>
+        <button type="button" className="ml-auto text-xs text-brand-700 hover:underline" onClick={() => setSel(new Set(rows.map((o) => o.templateId)))}>Marcar todas da lista</button>
+        <button type="button" className="text-xs text-ink-muted hover:underline" onClick={() => setSel(new Set())}>Limpar</button>
+      </div>
+      <div className="max-h-[55vh] overflow-y-auto rounded-md border border-slate-200">
         {Object.entries(groups).map(([cat, list]) => (
           <div key={cat}>
-            <div className="bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">{cat}</div>
-            <Table head={['Obrigação', 'Prazo', 'Setor', 'Origem', '']}>
-              {list.map((o) => (
-                <tr key={o.templateId} className="hover:bg-slate-50/60">
-                  <td className="td w-[46%]">
-                    <div className="font-medium">{o.name} {o.generatesFine && <Badge tone="red">multa</Badge>} {o.own && <Badge tone="violet">do escritório</Badge>}</div>
-                    {o.notes && <div className="mt-0.5 max-w-xl text-xs text-ink-muted">{o.notes}</div>}
-                  </td>
-                  <td className="td w-52 whitespace-nowrap text-sm">{o.deadline}</td>
-                  <td className="td w-28 text-sm">{o.department ?? '—'}</td>
-                  <td className="td w-56"><Badge tone={o.rule === null ? 'slate' : o.rule ? 'green' : 'amber'}>{o.reason}</Badge></td>
-                  <td className="td w-44 whitespace-nowrap text-right">
-                    {o.applies
-                      ? <Button size="sm" variant="secondary" disabled={busy} onClick={() => set(o, false)}>Desativar</Button>
-                      : <Button size="sm" disabled={busy} onClick={() => set(o, true)}>Ativar</Button>}
-                    {o.rule !== null && <Button size="sm" variant="ghost" disabled={busy} onClick={() => set(o, null)}>Padrão</Button>}
-                  </td>
-                </tr>
-              ))}
-            </Table>
+            <div className="sticky top-0 bg-slate-50 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted">{cat}</div>
+            {list.map((o) => (
+              <label key={o.templateId} className="flex cursor-pointer items-start gap-3 border-t border-slate-100 px-3 py-2 hover:bg-slate-50">
+                <input type="checkbox" className="mt-0.5" checked={sel.has(o.templateId)} onChange={() => toggle(o.templateId)} />
+                <span className="flex-1">
+                  <span className="text-sm font-medium">{o.name}</span> {o.suggested && <Badge tone="green">sugerida</Badge>} {o.generatesFine && <Badge tone="red">multa</Badge>}
+                  <span className="block text-xs text-ink-muted">{o.deadline}{o.department ? ` · ${o.department}` : ''}{!o.suggested && o.reason ? ` · ${o.reason}` : ''}</span>
+                </span>
+              </label>
+            ))}
           </div>
         ))}
-      </Card>
+        {!rows.length && <p className="p-6 text-center text-sm text-ink-muted">Nada encontrado.</p>}
+      </div>
+    </Modal>
+  );
+}
+
+function ClientePicker({ exclude, multiple, value, onChange }: { exclude: string; multiple?: boolean; value: string[]; onChange: (v: string[]) => void }) {
+  const { data } = useApi<any[]>('/tasks/config/clients');
+  const [q, setQ] = useState('');
+  const list = (data ?? []).filter((c) => c.id !== exclude && (!q || `${c.legalName} ${c.tradeName ?? ''} ${c.document}`.toLowerCase().includes(q.toLowerCase().replace(/[./-]/g, ''))));
+  return (
+    <div>
+      <SearchInput className="mb-2" value={q} onChange={setQ} placeholder="Empresa (nome ou CNPJ)" />
+      {multiple && <div className="mb-1 flex gap-3 text-xs"><button type="button" className="text-brand-700 hover:underline" onClick={() => onChange([...new Set([...value, ...list.map((c) => c.id)])])}>Marcar todos da lista</button><button type="button" className="text-ink-muted hover:underline" onClick={() => onChange([])}>Limpar</button></div>}
+      <div className="max-h-72 overflow-y-auto rounded-md border border-slate-200">
+        {!data ? <Loading /> : list.map((c) => (
+          <label key={c.id} className="flex cursor-pointer items-center gap-3 border-b border-slate-100 px-3 py-2 last:border-0 hover:bg-slate-50">
+            <input type={multiple ? 'checkbox' : 'radio'} name="cliente-picker" checked={value.includes(c.id)} onChange={() => onChange(multiple ? (value.includes(c.id) ? value.filter((x) => x !== c.id) : [...value, c.id]) : [c.id])} />
+            <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{c.tradeName ?? c.legalName}</span><span className="text-xs text-ink-muted">{doc(c.document)} · {label(c.regime)}</span></span>
+          </label>
+        ))}
+      </div>
     </div>
+  );
+}
+
+function ReplicarObrigacoes({ id, count, onClose }: { id: string; count: number; onClose: () => void }) {
+  const [targets, setTargets] = useState<string[]>([]);
+  const [mode, setMode] = useState<'add' | 'replace'>('add');
+  const { busy, run } = useAction();
+  return (
+    <Modal wide open title={`Replicar as ${count} obrigações deste cliente`} onClose={onClose}
+      footer={<><Button variant="ghost" onClick={onClose}>Cancelar</Button><Button disabled={busy || !targets.length} onClick={() => run(async () => {
+        const r = await apiPost<any>(`/tasks/clients/${id}/obligations/replicate`, { targetClientIds: targets, mode });
+        onClose();
+        return r;
+      }, `Obrigações replicadas para ${targets.length} cliente(s). As tarefas do mês já foram geradas.`)}>Replicar para {targets.length || ''} cliente(s)</Button></>}>
+      <div className="mb-3 grid gap-2 sm:grid-cols-2">
+        <label className={clsx('flex cursor-pointer items-start gap-2 rounded-md border p-3 text-sm', mode === 'add' ? 'border-brand-500 bg-brand-50/50' : 'border-slate-200')}><input type="radio" name="modo" checked={mode === 'add'} onChange={() => setMode('add')} className="mt-0.5" /><span><b>Somar</b><span className="block text-xs text-ink-muted">Inclui as que faltam; mantém as que o cliente já tem.</span></span></label>
+        <label className={clsx('flex cursor-pointer items-start gap-2 rounded-md border p-3 text-sm', mode === 'replace' ? 'border-brand-500 bg-brand-50/50' : 'border-slate-200')}><input type="radio" name="modo" checked={mode === 'replace'} onChange={() => setMode('replace')} className="mt-0.5" /><span><b>Deixar igual</b><span className="block text-xs text-ink-muted">Os clientes escolhidos ficam exatamente com estas obrigações.</span></span></label>
+      </div>
+      <ClientePicker exclude={id} multiple value={targets} onChange={setTargets} />
+    </Modal>
+  );
+}
+
+function CopiarDeCliente({ id, onClose, onDone }: { id: string; onClose: () => void; onDone: () => void }) {
+  const [src, setSrc] = useState<string[]>([]);
+  const [mode, setMode] = useState<'add' | 'replace'>('add');
+  const { busy, run } = useAction();
+  return (
+    <Modal wide open title="Copiar obrigações de outro cliente" onClose={onClose}
+      footer={<><Button variant="ghost" onClick={onClose}>Cancelar</Button><Button disabled={busy || !src.length} onClick={() => run(async () => { const r = await apiPost<any>(`/tasks/clients/${id}/obligations/copy-from`, { sourceClientId: src[0], mode }); onDone(); return r; }, 'Obrigações copiadas. As tarefas do mês já foram geradas.')}>Copiar</Button></>}>
+      <label className="mb-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={mode === 'replace'} onChange={(e) => setMode(e.target.checked ? 'replace' : 'add')} /> Deixar igual ao cliente escolhido (tira as que ele não tem)</label>
+      <ClientePicker exclude={id} value={src} onChange={setSrc} />
+    </Modal>
   );
 }
 

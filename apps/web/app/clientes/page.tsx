@@ -90,9 +90,10 @@ function List() {
       <Modal wide open={!!form} title="Novo cliente" onClose={() => setForm(null)} footer={<Button disabled={busy || !form?.document || !!erroDocumento(form?.document ?? '', 'auto')} onClick={() => run(async () => {
         const responsibles = Object.entries(form.responsibles).filter(([, u]) => u).map(([departmentId, userId]) => ({ departmentId, userId }));
         const contacts = form.contact.name ? [{ ...form.contact, receives: ['EMAIL', 'WHATSAPP', 'APP'] }] : [];
-        await apiPost('/clients', { document: form.document, regime: form.regime, contacts, responsibles });
+        const novo = await apiPost<any>('/clients', { document: form.document, regime: form.regime, contacts, responsibles });
         setForm(null); reload();
-      }, 'Cliente cadastrado. Pastas e obrigações do regime já foram criadas.')}>{busy ? 'Buscando dados do CNPJ…' : 'Cadastrar'}</Button>}>
+        window.location.href = `/clientes/${novo.id}?tab=obrigacoes`;
+      }, 'Cliente cadastrado. Agora defina as obrigações dele.')}>{busy ? 'Buscando dados do CNPJ…' : 'Cadastrar'}</Button>}>
         {form && <>
           <p className="text-sm text-ink-soft">Informe o CNPJ e clique em <b>Consultar</b>: razão social, endereço, CNAE, inscrição estadual, sócios e regime vêm da consulta pública da Receita (CNPJ.ws).</p>
           <div className="grid grid-cols-2 gap-3">
