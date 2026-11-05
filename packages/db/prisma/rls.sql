@@ -23,7 +23,7 @@ BEGIN
     'MailboxMessage','WhatsappNumber','Conversation','Broadcast','InternalChannel',
     'FiscalDocument','ExportJob','Process','ServiceOrder','Folder',
     'RefreshToken','LoginCode','Notification','AgentDevice','JobFailure','ClientObligation',
-    'TemplateSetting','TaskGroup','ClientGroup','BoardStage','TaskFlow','DocumentTemplate','ClientNotification','DeliveryNote'
+    'TemplateSetting','TaskGroup','ClientGroup','BoardStage','TaskFlow','DocumentTemplate','ClientNotification','DeliveryNote','ProcessEvent','DeliveryLink'
   ]
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);

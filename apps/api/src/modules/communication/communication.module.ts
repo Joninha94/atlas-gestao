@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Body, Controller, Delete, ForbiddenException, Get, Headers, Module, Param, Post, Put, Query, RawBodyRequest, Req } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request } from 'express';
@@ -220,7 +221,7 @@ export class AppChatController {
  */
 @Controller('webhooks/whatsapp')
 export class WhatsappWebhookController {
-  constructor(private readonly comm: CommunicationService, private readonly sys: SystemPrismaService) {}
+  constructor(private readonly comm: CommunicationService, private readonly sys: SystemPrismaService, private readonly events: EventEmitter2) {}
 
   @Public()
   @Get()
@@ -246,6 +247,7 @@ export class WhatsappWebhookController {
         for (const s of v.statuses ?? []) {
           const at = new Date(Number(s.timestamp) * 1000);
           if (s.status === 'read') await this.sys.message.updateMany({ where: { externalId: s.id }, data: { readAt: at } });
+          this.events.emit('whatsapp.status', { externalId: s.id, status: s.status, at });
         }
       }
     }

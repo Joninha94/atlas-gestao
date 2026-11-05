@@ -689,6 +689,55 @@ await step('Tarefa: arquivos para entregar, POP obrigatório, status (impediment
   assert.deepEqual(card.pop, { done: 2, total: 2 });
 });
 
+await step('Tarefas: geração do mês seguinte, avulsa com anexo obrigatório, transferência, histórico com download rastreado e conversa do atendimento', async () => {
+  // Gerar agora (antecipa o dia 25): idempotente
+  const next = (() => { const d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).toISOString().slice(0, 7); })();
+  const g1 = await post('/tasks/generate', { month: next });
+  assert.equal(g1.month, next);
+  assert.ok(g1.created >= 1, 'gerou tarefas do mês seguinte');
+  assert.equal((await post('/tasks/generate', { month: next })).created, 0, 'não duplica');
+
+  // Tarefa avulsa para qualquer mês, exigindo anexo
+  const due = `${next}-15`;
+  await assert.rejects(post('/tasks/processes', { clientId: ctx.clientId, title: 'x', dueDate: due }), /título/);
+  const av = await post('/tasks/processes', { clientId: ctx.clientId, title: 'Enviar contrato social atualizado', dueDate: due, requireFiles: true, description: 'Cliente pediu por telefone' });
+  assert.equal(av.competence, next);
+  assert.equal(av.requireFiles, true);
+  await assert.rejects(post(`/tasks/processes/${av.id}/conclude`, {}), /exige anexo/);
+
+  // Transferência para o colaborador (aviso no sino dele)
+  await post(`/tasks/processes/${av.id}/transfer`, { userId: ctx.colabId, note: 'Fica com você' });
+  assert.deepEqual((await get(`/tasks/processes/${av.id}`)).assigneeIds, [ctx.colabId]);
+
+  // Conversa do atendimento para os comentários
+  const convs = await get(`/tasks/processes/${av.id}/conversations`);
+  assert.ok(convs.some((c) => c.id === ctx.convId), 'atendimento do cliente listado');
+  const cm = await post(`/tasks/processes/${av.id}/conversations/${ctx.convId}`, {});
+  assert.match(cm.body, /segunda via da guia/);
+
+  // Conclui com anexo → envio; cliente abre o e-mail e baixa pelo link rastreado
+  const [f] = await upload([{ name: 'contrato.pdf', buf: await pdfWithText(['Contrato social']) }]);
+  await post(`/tasks/processes/${av.id}/files`, { files: [f] });
+  const r = await post(`/tasks/processes/${av.id}/conclude`, {});
+  const out = await get('/dev/outbox');
+  const mail = out.find((o) => o.channel === 'EMAIL' && o.subject?.includes('Enviar contrato social'));
+  assert.ok(mail, 'e-mail enviado');
+  const full = await get(`/tasks/processes/${av.id}`);
+  const token = /\/d\/([A-Za-z0-9_-]{20,})/.exec(mail.body)?.[1]; // link rastreado do destinatário
+  assert.ok(token, 'link rastreado no e-mail');
+  await fetch(`${API}/d/${token}.gif`);
+  const dl = await fetch(`${API}/d/${token}/0`, { redirect: 'manual' });
+  assert.equal(dl.status, 302);
+  const page = await (await fetch(`${API}/d/${token}`)).text();
+  assert.match(page, /contrato\.pdf/);
+  const tl = await get(`/tasks/processes/${av.id}/timeline`);
+  const kinds = tl.map((e) => e.kind);
+  for (const k of ['CRIADA', 'TRANSFERIDA', 'CONVERSA', 'ARQUIVO', 'STATUS', 'ENVIO', 'RECEBIDO', 'BAIXADO']) assert.ok(kinds.includes(k), `histórico tem ${k}`);
+  const baixou = tl.find((e) => e.kind === 'BAIXADO');
+  assert.match(baixou.text, /Maria Cliente.*baixou contrato\.pdf/);
+  assert.ok(full.deliveries[0] && r.aviso.number);
+});
+
 await step('Configurar tarefas: fluxo encadeado, quadro, agrupadores e documento no papel timbrado', async () => {
   const a = await post('/tasks/templates', { name: `Fluxo A ${Date.now()}`, recurrence: 'NENHUMA', dueDay: 1, steps: [{ order: 1, title: 'Passo A', attachment: 'OPCIONAL' }] });
   const b = await post('/tasks/templates', { name: `Fluxo B ${Date.now()}`, recurrence: 'NENHUMA', dueDay: 1, steps: [{ order: 1, title: 'Passo B', attachment: 'OPCIONAL' }] });

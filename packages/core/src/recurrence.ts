@@ -57,6 +57,34 @@ export function competenceToGenerate(t: TemplateTiming, today: Date): string | n
   }
 }
 
+/**
+ * Geração mensal (dia 25): competências cujo prazo cai no mês `target` (AAAA-MM).
+ * Mensal: competência = mês do prazo − dueMonthOffset. Trimestral: competências de fim de trimestre (03, 06, 09, 12).
+ * Semestral: 06 e 12. Anual: o ano-base cujo prazo (recurrenceMonth) cai no mês alvo.
+ * Diária/semanal/avulsa não entram (diária e semanal continuam no job do dia).
+ */
+export function competencesDueInMonth(t: TemplateTiming, target: string): string[] {
+  const [ty, tm] = target.split('-').map(Number);
+  const inTarget = (c: string) => {
+    const d = dueDateFor(t, c);
+    return d.getUTCFullYear() === ty && d.getUTCMonth() + 1 === tm;
+  };
+  if (t.recurrence === 'ANUAL') return [String(ty - 1), String(ty)].filter(inTarget);
+  if (!['MENSAL', 'TRIMESTRAL', 'SEMESTRAL'].includes(t.recurrence)) return [];
+  const c = new Date(Date.UTC(ty, tm - 1 - t.dueMonthOffset, 1));
+  const cm = c.getUTCMonth() + 1;
+  if (t.recurrence === 'TRIMESTRAL' && cm % 3 !== 0) return [];
+  if (t.recurrence === 'SEMESTRAL' && cm % 6 !== 0) return [];
+  const competence = comp(c.getUTCFullYear(), cm);
+  return inTarget(competence) ? [competence] : [];
+}
+
+/** Mês seguinte ao de `d` (AAAA-MM). */
+export function nextMonth(d = new Date()) {
+  const n = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+  return comp(n.getUTCFullYear(), n.getUTCMonth() + 1);
+}
+
 /** Vencimento a partir da competência (AAAA-MM ou AAAA). */
 export function dueDateFor(t: TemplateTiming, competence: string): Date {
   if (/^\d{4}$/.test(competence)) {

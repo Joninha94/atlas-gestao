@@ -3,6 +3,8 @@ import { promises as dns } from 'node:dns';
 import { auditEmailDomain, formatDocumento, popProgress, renderTemplate, splitEmails, type PopChecks, type PopItem } from '@produtiva/core';
 import { documentoLivrePdf } from '../../integrations/declaracoes/documento-livre';
 import { DriveService } from '../drive/drive.service';
+import { randomBytes } from 'node:crypto';
+import { logEvent } from './process-events';
 import { padroesTarefas } from '@produtiva/db';
 import { PrismaService } from '../../common/prisma.service';
 import { MailerService } from '../../integrations/mail/mailer.service';
@@ -106,6 +108,8 @@ export class TaskConfigService {
     else delete checks[itemId];
     await this.prisma.process.update({ where: { id: processId }, data: { popChecks: checks, ...(p.status === 'A_FAZER' ? { status: 'EM_PROGRESSO' } : {}) } });
     await this.prisma.auditLog.create({ data: { tenantId, userId: user.sub, clientId: p.clientId, action: checked ? 'pop.marcar' : 'pop.desmarcar', entity: 'Process', entityId: processId, meta: { itemId } } });
+    const item = items.find((i) => i.id === itemId)!;
+    await logEvent(this.prisma, { tenantId, processId, kind: 'POP', actorId: user.sub, actorName: user.name, text: `${checked ? 'Marcou' : 'Desmarcou'} no POP: ${item.text}` });
     return { checks, progress: popProgress(items, checks) };
   }
 
@@ -224,27 +228,38 @@ export class TaskConfigService {
       return i < 0 ? `${body}\n${note.message}` : `${body.slice(0, i)}\n\n${note.message}${body.slice(i)}`;
     };
 
+    const pub = (process.env.PUBLIC_API_URL ?? '').replace(/\/$/, '');
     for (const r of planned) {
       const c = contacts.find((x) => x.id === r.contactId)!;
       const vars = { ...base, contato: c.name.split(' ')[0] };
+      // Link rastreado por destinatário: sabemos quem abriu e quem baixou cada arquivo
+      const link = await this.prisma.deliveryLink.create({ data: { token: randomBytes(18).toString('base64url'), tenantId, deliveryId: note.id, processId, channel: r.channel, recipient: r.to, contactName: c.name } });
       try {
         if (r.channel === 'EMAIL') {
           const anexos = links.length ? `\nDocumentos:\n${links.map((l) => `• ${l.name}`).join('\n')}\n` : '';
-          const text = renderTemplate(withMsg(mail!.body), { ...vars, anexos });
+          const text = renderTemplate(withMsg(mail!.body), { ...vars, anexos, link: `${pub}/d/${link.token}` });
           const html = text.split('\n').map((l) => (l ? `<p style="margin:0 0 8px">${esc(l)}</p>` : '')).join('')
-            + (links.length ? `<ul>${links.map((l) => `<li><a href="${l.url}">${esc(l.name)}</a></li>`).join('')}</ul>` : '')
-            + `<p style="margin-top:12px;font-size:12px;color:#64748b">Protocolo de entrega nº ${nro} — <a href="${protocolUrl}">ver protocolo</a></p>`;
+            + (links.length ? `<ul>${links.map((l, i) => `<li><a href="${pub}/d/${link.token}/${i}">${esc(l.name)}</a></li>`).join('')}</ul>` : '')
+            + `<p style="margin-top:12px;font-size:12px;color:#64748b">Protocolo de entrega nº ${nro} — <a href="${pub}/d/${link.token}/p">ver protocolo</a></p>`
+            + `<img src="${pub}/d/${link.token}.gif" width="1" height="1" alt="" />`;
           await this.mailer.sendForTenant(tenantId, { to: r.to, subject: renderTemplate(mail!.subject ?? '{{tarefa}} concluída', vars), html });
         } else if (r.channel === 'WHATSAPP') {
           const anexos = links.length ? `\n📎 ${links.map((l) => l.name).join(', ')}` : '';
           const provider = await this.whatsapp.forTenant(tenantId);
-          await provider.sendText(r.to, `${renderTemplate(withMsg(wa!.body), { ...vars, anexos })}\nProtocolo nº ${nro}`);
-          for (const l of links) if (l.url) await provider.sendDocument(r.to, l.url, l.name);
+          const ids: string[] = [];
+          ids.push((await provider.sendText(r.to, `${renderTemplate(withMsg(wa!.body), { ...vars, anexos, link: `${pub}/d/${link.token}` })}\nProtocolo nº ${nro}`)).externalId);
+          for (const l of links) if (l.url) ids.push((await provider.sendDocument(r.to, l.url, l.name)).externalId);
+          await this.prisma.deliveryLink.update({ where: { token: link.token }, data: { externalIds: ids.filter(Boolean) } });
         } else {
           await this.notifications.pushToContact(r.to, renderTemplate(app!.subject ?? '{{tarefa}} concluída', base), renderTemplate(app!.body, base), { kind: 'TAREFA_CONCLUIDA', deliveryId: note.id });
         }
         r.ok = true;
       } catch (e) { r.ok = false; r.error = (e as Error).message.slice(0, 300); }
+      await logEvent(this.prisma, {
+        tenantId, processId, kind: r.ok ? 'ENVIO' : 'FALHA_ENVIO', actorType: 'SISTEMA', actorName: opts.userName ?? 'Sistema',
+        text: r.ok ? `Enviado por ${canal[r.channel]} para ${r.channel === 'APP' ? `${c.name} (app)` : `${c.name} <${r.to}>`} — protocolo nº ${nro}` : `Falha no envio por ${canal[r.channel]} para ${r.to}: ${r.error}`,
+        meta: { deliveryId: note.id, channel: r.channel, to: r.to },
+      });
     }
     if (app) {
       await this.prisma.clientNotification.create({

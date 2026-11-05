@@ -11,6 +11,7 @@ import { describeDeadline, TasksService } from './tasks.service';
 import { TaskConfigController } from './task-config.controller';
 import { TaskConfigService } from './task-config.service';
 import { DriveModule } from '../drive/drive.module';
+import { DeliveryTrackingController, DeliveryTrackingService } from './delivery-tracking.controller';
 
 const StepSchema = z.object({
   order: z.number().int(),
@@ -138,6 +139,50 @@ export class TasksController {
     return this.tasks.completeTask(u.tenantId, u.sub, id, !!b?.sendToClient);
   }
 
+  /** Gerar agora as tarefas que vencem no mês escolhido (padrão: mês seguinte). Antecipa a geração do dia 25. */
+  @Post('generate')
+  @RequirePermission(PERMISSIONS.TASKS_MANAGE)
+  generate(@CurrentUser() u: AuthUser, @Body() b: { month?: string }) {
+    const d = new Date();
+    const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).toISOString().slice(0, 7);
+    return this.tasks.generateForMonth(u.tenantId, b?.month || next, { userName: u.name });
+  }
+
+  /** Tarefa avulsa (qualquer cliente, qualquer mês). */
+  @Post('processes')
+  createManual(@CurrentUser() u: AuthUser, @Body() body: unknown) {
+    const b = z.object({
+      clientId: z.string().uuid('Escolha o cliente'), title: z.string().max(200).default(''), description: z.string().max(5000).nullish(),
+      dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}/, 'Informe o vencimento'), competence: z.string().regex(/^\d{4}-\d{2}$/).nullish().or(z.literal('')),
+      assigneeId: z.string().uuid().nullish().or(z.literal('')), departmentId: z.string().uuid().nullish().or(z.literal('')), popId: z.string().uuid().nullish().or(z.literal('')),
+      templateId: z.string().uuid().nullish().or(z.literal('')), requireFiles: z.boolean().default(false), steps: z.array(z.string().max(200)).max(30).optional(),
+    }).refine((x) => x.title.trim().length >= 3 || !!x.templateId, { message: 'Dê um título à tarefa (mínimo 3 letras) ou escolha um modelo' }).parse(body);
+    return this.tasks.createManual(u.tenantId, { sub: u.sub, name: u.name }, {
+      ...b, competence: b.competence || null, assigneeId: b.assigneeId || null, departmentId: b.departmentId || null, popId: b.popId || null, templateId: b.templateId || null,
+    });
+  }
+
+  @Post('processes/:id/transfer')
+  transfer(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() b: { userId: string; note?: string }) {
+    if (!b?.userId) throw new BadRequestException('Escolha o colaborador.');
+    return this.tasks.transfer(u.tenantId, { sub: u.sub, name: u.name }, id, b.userId, b.note);
+  }
+
+  @Get('processes/:id/timeline')
+  timeline(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.tasks.timeline(u.tenantId, id);
+  }
+
+  @Get('processes/:id/conversations')
+  conversations(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.tasks.conversations(u.tenantId, id);
+  }
+
+  @Post('processes/:id/conversations/:conversationId')
+  importConversation(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('conversationId') cid: string, @Body() b: { messageIds?: string[] }) {
+    return this.tasks.importConversation(u.tenantId, { sub: u.sub, name: u.name }, id, cid, b?.messageIds);
+  }
+
   @Post('tasks/:id/uncomplete')
   uncomplete(@CurrentUser() u: AuthUser, @Param('id') id: string) {
     return this.tasks.uncompleteTask(u.tenantId, u.sub, id);
@@ -187,7 +232,7 @@ export class TasksController {
   @RequirePermission(PERMISSIONS.TASKS_MANAGE)
   bulk(@CurrentUser() u: AuthUser, @Body() b: { ids: string[]; assigneeIds?: string[]; dueDate?: string; departmentIds?: string[] }) {
     const { ids, ...data } = b;
-    return this.tasks.bulkUpdate(u.tenantId, ids, data);
+    return this.tasks.bulkUpdate(u.tenantId, ids, data, { sub: u.sub, name: u.name });
   }
 
   @Post('processes/:id/comments')
@@ -309,8 +354,8 @@ export class TasksController {
 
 @Module({
   imports: [DriveModule],
-  controllers: [TasksController, TaskConfigController],
-  providers: [TasksService, TaskConfigService],
+  controllers: [TasksController, TaskConfigController, DeliveryTrackingController],
+  providers: [TasksService, TaskConfigService, DeliveryTrackingService],
   exports: [TasksService, TaskConfigService],
 })
 export class TasksModule {}

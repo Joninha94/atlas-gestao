@@ -2,9 +2,9 @@
 import clsx from 'clsx';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
-import { BellRing, Check, ChevronDown, ChevronRight, ClipboardCheck, Copy, FileDown, Lock, Paperclip, Send, Settings2, Sparkles, Upload, Wand2 } from 'lucide-react';
+import { BellRing, Check, PlusCircle, RefreshCw, ChevronDown, ChevronRight, ClipboardCheck, Copy, FileDown, Lock, Paperclip, Send, Settings2, Sparkles, Upload, Wand2 } from 'lucide-react';
 import { Board } from './quadro';
-import { TaskPanel } from './tarefa';
+import { GenerateModal, NewTaskModal, TaskPanel } from './tarefa';
 import { Configurar } from './configurar';
 import { apiPost, apiPut, apiDelete, download, getSession, uploadFiles } from '../../lib/api';
 import { useAction, useApi } from '../../lib/hooks';
@@ -20,11 +20,22 @@ export default function TarefasPage() {
 function Tarefas() {
   const params = useSearchParams();
   const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) ?? 'lista');
-  const { data: dash } = useApi<any>('/tasks/dashboard');
+  const { data: dash, reload: reloadDash } = useApi<any>('/tasks/dashboard');
+  const [newTask, setNewTask] = useState(false);
+  const [gen, setGen] = useState(false);
+  const [opened, setOpened] = useState<string | null>(params.get('processo'));
+  const [listKey, setListKey] = useState(0);
   return (
     <div>
       <PageHeader title="Tarefas" subtitle="Obrigações acessórias recorrentes, modelos por regime, POP, cascata, anexos e ordens de serviço dos clientes."
-        actions={<Button variant={tab === 'configurar' ? 'primary' : 'secondary'} onClick={() => setTab('configurar')}><Settings2 size={15} /> Configurar</Button>} />
+        actions={<div className="flex flex-wrap gap-2">
+          <Button onClick={() => setNewTask(true)}><PlusCircle size={15} /> Nova tarefa</Button>
+          <Button variant="secondary" onClick={() => setGen(true)}><RefreshCw size={15} /> Gerar tarefas</Button>
+          <Button variant={tab === 'configurar' ? 'primary' : 'secondary'} onClick={() => setTab('configurar')}><Settings2 size={15} /> Configurar</Button>
+        </div>} />
+      {newTask && <NewTaskModal onClose={() => setNewTask(false)} onCreated={(id) => { setNewTask(false); setListKey((k) => k + 1); reloadDash(); setOpened(id); }} />}
+      {gen && <GenerateModal onClose={() => setGen(false)} onDone={() => { setGen(false); setListKey((k) => k + 1); reloadDash(); }} />}
+      {opened && <TaskPanel id={opened} onClose={() => setOpened(null)} onChange={() => { setListKey((k) => k + 1); reloadDash(); }} />}
       {dash && <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Abertas" value={dash.abertas ?? dash.aFazer + dash.emProgresso} hint={dash.emMulta ? `${dash.emMulta} em multa` : undefined} tone={dash.emMulta ? 'amber' : undefined} />
         <Stat label="Impedimento" value={dash.impedimento ?? 0} tone={dash.impedimento ? 'red' : undefined} />
@@ -32,7 +43,7 @@ function Tarefas() {
         <Stat label="Concluídas (30 dias)" value={dash.concluidos30d} tone="green" />
       </div>}
       <Tabs value={tab} onChange={setTab} tabs={[{ id: 'lista', label: 'Processos' }, { id: 'quadro', label: 'Quadro' }, { id: 'calendario', label: 'Calendário' }, { id: 'arraste', label: 'Arrasta-e-solta inteligente' }, { id: 'modelos', label: 'Modelos de obrigações' }, { id: 'os', label: 'Formulários e ordens de serviço' }, { id: 'configurar', label: 'Configurar' }]} />
-      {tab === 'lista' && <List initialStatus={params.get('status') ?? 'ABERTA'} mine={params.get('mine') === '1'} openId={params.get('processo')} />}
+      {tab === 'lista' && <List key={listKey} initialStatus={params.get('status') ?? 'ABERTA'} mine={params.get('mine') === '1'} />}
       {tab === 'calendario' && <Calendar />}
       {tab === 'arraste' && <SmartDrop />}
       {tab === 'modelos' && <Templates />}
@@ -43,7 +54,8 @@ function Tarefas() {
   );
 }
 
-function List({ initialStatus, mine, openId }: { initialStatus: string; mine: boolean; openId?: string | null }) {
+function List({ initialStatus, mine }: { initialStatus: string; mine: boolean }) {
+  const openId: string | null = null;
   const me = getSession()?.user.id ?? '';
   const [f, setF] = useState({ status: initialStatus, competence: openId ? '' : lastCompetence(), departmentId: '', assigneeId: mine ? me : '' });
   const q = new URLSearchParams(Object.fromEntries(Object.entries(f).filter(([, v]) => v))).toString();

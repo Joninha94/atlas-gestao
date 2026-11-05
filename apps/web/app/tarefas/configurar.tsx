@@ -271,12 +271,13 @@ function Generation() {
   return (
     <Card>
       <div className="space-y-3">
-        <p className="text-sm text-ink-muted">As tarefas recorrentes são geradas todo dia às 00:05, conforme o prazo de cada modelo (o mês de referência é sempre a competência anterior ao vencimento).</p>
+        <p className="text-sm text-ink-muted">Todo mês, no dia escolhido abaixo, o sistema gera as tarefas que <b>vencem no mês seguinte</b> (ex.: dia 25/11 gera as tarefas com vencimento em dezembro). O botão "Gerar agora" antecipa.</p>
+        <Field label="Dia da geração automática (1 a 28)"><input type="number" min={1} max={28} className="input w-28" value={data.generationDay ?? 25} onChange={(e) => setData({ ...data, generationDay: Math.min(28, Math.max(1, Number(e.target.value) || 25)) })} /></Field>
         <Toggle k="onClientCreate" title="Gerar as tarefas do mês ao cadastrar um cliente" hint="O cliente novo já entra nas obrigações mensais do seu regime." />
         <Toggle k="notifyClientDefault" title="Avisar o cliente ao concluir (padrão)" hint="E-mail para todos os e-mails cadastrados, WhatsApp e notificação no app. Pode ser desligado por modelo em Tarefas recorrentes → Gerenciar." />
         <div className="flex flex-wrap gap-2 pt-2">
           <Button disabled={busy} onClick={() => run(async () => { setData(await apiPut('/tasks/config/generation', data)); }, 'Configuração salva.')}>Salvar</Button>
-          <Button variant="secondary" disabled={busy} onClick={() => run(async () => { const r = await apiPost<any>('/tasks/config/generation/run'); return r; }, 'Geração executada: processos que faltavam foram criados.')}><Play size={14} /> Gerar agora</Button>
+          <Button variant="secondary" disabled={busy} onClick={() => run(async () => { const r = await apiPost<any>('/tasks/generate', {}); return r; }, 'Geração do mês seguinte executada (o que já existia não foi duplicado).')}><Play size={14} /> Gerar agora (mês seguinte)</Button>
         </div>
       </div>
     </Card>

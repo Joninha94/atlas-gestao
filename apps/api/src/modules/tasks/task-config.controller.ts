@@ -31,7 +31,7 @@ const MessageSchema = z.object({
   subject: z.string().max(200).nullish(), body: z.string().min(5).max(4000), active: z.boolean().default(true),
 });
 const TemplateSettingSchema = z.object({ popId: id().nullish(), groupId: id().nullish(), notifyClient: z.boolean().default(true) });
-const GenerationSchema = z.object({ onClientCreate: z.boolean().default(true), notifyClientDefault: z.boolean().default(true), blockWithoutPop: z.boolean().default(false) });
+const GenerationSchema = z.object({ generationDay: z.number().int().min(1).max(28).default(25), onClientCreate: z.boolean().default(true), notifyClientDefault: z.boolean().default(true), blockWithoutPop: z.boolean().default(false) });
 const HoursSchema = z.array(z.object({ weekday: z.number().int().min(0).max(6), start: z.string().regex(/^\d{2}:\d{2}$/), end: z.string().regex(/^\d{2}:\d{2}$/) }).refine((w) => w.start < w.end, 'Início deve ser antes do fim'));
 const SenderSchema = z.object({ emailFromName: z.string().max(80).nullish(), emailFrom: z.string().email('E-mail do remetente inválido').nullish().or(z.literal('')), emailReplyTo: z.string().email('E-mail de resposta inválido').nullish().or(z.literal('')) });
 

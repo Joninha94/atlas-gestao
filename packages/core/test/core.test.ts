@@ -227,3 +227,17 @@ test('modelos de mensagem e e-mails múltiplos', () => {
   assert.equal(r.score, 3);
   assert.equal(r.checks.find((c) => c.key === 'dmarc')!.ok, false);
 });
+
+// ---------------- Geração no dia 25 para o mês seguinte ----------------
+import { competencesDueInMonth, nextMonth } from '../src/recurrence';
+
+test('dia 25: competências com prazo no mês seguinte', () => {
+  assert.deepEqual(competencesDueInMonth({ recurrence: 'MENSAL', dueDay: 20, dueMonthOffset: 1 }, '2026-12'), ['2026-11']); // DAS de nov vence em dez
+  assert.deepEqual(competencesDueInMonth({ recurrence: 'MENSAL', dueDay: 5, dueMonthOffset: 0 }, '2026-12'), ['2026-12']);
+  assert.deepEqual(competencesDueInMonth({ recurrence: 'TRIMESTRAL', dueDay: 31, dueMonthOffset: 1 }, '2027-01'), ['2026-12']);
+  assert.deepEqual(competencesDueInMonth({ recurrence: 'TRIMESTRAL', dueDay: 31, dueMonthOffset: 1 }, '2026-12'), []);
+  assert.deepEqual(competencesDueInMonth({ recurrence: 'ANUAL', dueDay: 31, dueMonthOffset: 1, recurrenceMonth: 3 }, '2027-03'), ['2026']); // DEFIS
+  assert.deepEqual(competencesDueInMonth({ recurrence: 'ANUAL', dueDay: 20, dueMonthOffset: 1, recurrenceMonth: 12, dueSameYear: true }, '2026-12'), ['2026']); // 13º
+  assert.deepEqual(competencesDueInMonth({ recurrence: 'NENHUMA', dueDay: 1, dueMonthOffset: 1 }, '2026-12'), []);
+  assert.equal(nextMonth(new Date('2026-12-25T12:00:00Z')), '2027-01');
+});

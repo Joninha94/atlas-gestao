@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import {
-  adjustToBusinessDay, cascadeUnlock, competenceForRun, competenceToGenerate, dueDateForTemplate, matchClientDocument,
+  adjustToBusinessDay, cascadeUnlock, competenceForRun, competenceToGenerate, competencesDueInMonth, dueDateForTemplate, matchClientDocument, nextMonth,
   type Recurrence,
 } from '@produtiva/core';
 import { PrismaService } from '../../common/prisma.service';
@@ -10,6 +10,7 @@ import { AiGatewayService } from '../../integrations/ai/ai-gateway.service';
 import { DispatchService } from '../../integrations/dispatch.service';
 import { TaskConfigService } from './task-config.service';
 import { NotificationsService } from '../../integrations/notifications.service';
+import { logEvent } from './process-events';
 
 @Injectable()
 export class TasksService {
@@ -38,29 +39,65 @@ export class TasksService {
     return new Set(rows.map((h) => h.date.toISOString().slice(0, 10)));
   }
 
+  /** Dia do mês em que as tarefas do mês seguinte são geradas (padrão 25; Configurar → Geração de tarefas). */
+  async generationDay(tenantId: string) {
+    const t = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { taskSettings: true } });
+    const d = Number((t?.taskSettings as any)?.generationDay ?? 25);
+    return d >= 1 && d <= 28 ? d : 25;
+  }
+
+  /**
+   * Job diário (00:05): diárias/semanais no próprio dia; a partir do dia de geração (25),
+   * gera todas as tarefas que VENCEM no mês seguinte. É idempotente: rodar de novo não duplica.
+   */
   async generateForDate(tenantId: string, today = new Date(), holidays?: Set<string>) {
     holidays ??= await this.holidays();
-    const templates = await this.withSettings(tenantId, await this.prisma.processTemplate.findMany({
-      where: { OR: [{ tenantId }, { tenantId: null }], recurrence: { not: 'NENHUMA' } },
+    let created = 0;
+    const daily = await this.withSettings(tenantId, await this.prisma.processTemplate.findMany({
+      where: { OR: [{ tenantId }, { tenantId: null }], recurrence: { in: ['DIARIA', 'SEMANAL'] } },
       include: { steps: { orderBy: { order: 'asc' } } },
     }));
-    let created = 0;
     let clients: any[] | undefined;
-    for (const t of templates) {
-      const competence = competenceToGenerate(
-        { recurrence: t.recurrence as Recurrence, dueDay: t.dueDay, dueMonthOffset: t.dueMonthOffset, recurrenceMonth: t.recurrenceMonth, dueSameYear: t.dueSameYear },
-        today,
-      );
+    for (const t of daily) {
+      const competence = competenceToGenerate({ recurrence: t.recurrence as Recurrence, dueDay: t.dueDay, dueMonthOffset: t.dueMonthOffset, recurrenceMonth: t.recurrenceMonth, dueSameYear: t.dueSameYear }, today);
       if (!competence) continue;
       clients ??= await this.prisma.clientCompany.findMany({ where: { tenantId, active: true }, include: { responsibles: true, obligationRules: true } });
-      for (const c of clients.filter((x) => templateApplies(t, x))) {
-        created += (await this.createProcess(tenantId, t, c, competence, holidays)) ? 1 : 0;
-      }
+      for (const c of clients.filter((x) => templateApplies(t, x))) created += (await this.createProcess(tenantId, t, c, competence, holidays)) ? 1 : 0;
     }
+    if (today.getUTCDate() >= (await this.generationDay(tenantId))) created += (await this.generateForMonth(tenantId, nextMonth(today), { holidays })).created;
     return { created };
   }
 
-  async createProcess(tenantId: string, t: any, client: any, competence: string, holidays = new Set<string>(), opts: { flowId?: string; flowStep?: number; dueDate?: Date } = {}) {
+  /** Gera as tarefas que vencem no mês `target` (AAAA-MM). Usado no dia 25 e pelo botão "Gerar agora". */
+  async generateForMonth(tenantId: string, target: string, opts: { holidays?: Set<string>; clientIds?: string[]; userName?: string } = {}) {
+    if (!/^\d{4}-\d{2}$/.test(target)) throw new BadRequestException('Mês no formato AAAA-MM.');
+    const holidays = opts.holidays ?? (await this.holidays());
+    const templates = await this.withSettings(tenantId, await this.prisma.processTemplate.findMany({
+      where: { OR: [{ tenantId }, { tenantId: null }], recurrence: { in: ['MENSAL', 'TRIMESTRAL', 'SEMESTRAL', 'ANUAL'] } },
+      include: { steps: { orderBy: { order: 'asc' } } },
+    }));
+    // Modelo do escritório com o mesmo nome substitui o global
+    const own = new Set(templates.filter((t) => t.tenantId).map((t) => t.name));
+    const plan = templates
+      .filter((t) => t.tenantId || !own.has(t.name))
+      .flatMap((t) => competencesDueInMonth({ recurrence: t.recurrence as Recurrence, dueDay: t.dueDay, dueMonthOffset: t.dueMonthOffset, recurrenceMonth: t.recurrenceMonth, dueSameYear: t.dueSameYear }, target).map((competence) => ({ t, competence })));
+    if (!plan.length) return { created: 0, month: target };
+    const clients = await this.prisma.clientCompany.findMany({ where: { tenantId, active: true, ...(opts.clientIds ? { id: { in: opts.clientIds } } : {}) }, include: { responsibles: true, obligationRules: true } });
+    const existing = new Set((await this.prisma.process.findMany({
+      where: { tenantId, competence: { in: [...new Set(plan.map((x) => x.competence))] }, templateId: { in: plan.map((x) => x.t.id) } },
+      select: { templateId: true, clientId: true, competence: true },
+    })).map((x) => `${x.templateId}|${x.clientId}|${x.competence}`));
+    let created = 0;
+    for (const { t, competence } of plan) {
+      for (const c of clients.filter((x) => templateApplies(t, x))) {
+        if (existing.has(`${t.id}|${c.id}|${competence}`)) continue;
+        created += (await this.createProcess(tenantId, t, c, competence, holidays)) ? 1 : 0;
+      }
+    }
+    return { created, month: target };
+  }
+
+  async createProcess(tenantId: string, t: any, client: any, competence: string, holidays = new Set<string>(), opts: { flowId?: string; flowStep?: number; dueDate?: Date; by?: { id: string; name?: string } } = {}) {
     // Parcelamentos: só gera para quem tem parcelamento cadastrado
     if (t.monitorLink === 'PARCELAMENTOS' && !(await this.prisma.installment.count({ where: { clientId: client.id } }))) return null;
     const due = dueDateForTemplate(
@@ -71,9 +108,10 @@ export class TasksService {
     const defaults = await this.config.processDefaults(tenantId, t.id);
     const finalDue = opts.dueDate && opts.dueDate > due ? opts.dueDate : opts.dueDate && t.recurrence === 'NENHUMA' ? opts.dueDate : due;
     try {
-      return await this.prisma.process.create({
+      const created = await this.prisma.process.create({
         data: {
           tenantId,
+          requireFiles: t.steps.some((s: any) => s.attachment !== 'OPCIONAL'),
           templateId: t.id,
           clientId: client.id,
           title: t.name,
@@ -96,6 +134,8 @@ export class TasksService {
           },
         },
       });
+      await logEvent(this.prisma, { tenantId, processId: created.id, kind: 'CRIADA', actorType: opts.by ? 'USUARIO' : 'SISTEMA', actorId: opts.by?.id, actorName: opts.by?.name ?? 'Sistema', text: opts.flowId ? `Criada pelo fluxo (passo ${(opts.flowStep ?? 0) + 1})` : opts.by ? 'Criada a partir do modelo' : 'Gerada automaticamente pelo calendário de obrigações' });
+      return created;
     } catch (e: any) {
       if (e?.code === 'P2002') return null; // já existe para esta competência (idempotência)
       throw e;
@@ -147,17 +187,12 @@ export class TasksService {
   /** Cliente novo entra já nos processos mensais do mês corrente do seu regime. */
   @OnEvent(Events.CLIENT_CREATED)
   async onClientCreated(e: ClientCreatedEvent) {
-    const client = await this.prisma.clientCompany.findUniqueOrThrow({ where: { id: e.clientId }, include: { responsibles: true, obligationRules: true } });
     const gen = ((await this.prisma.tenant.findUnique({ where: { id: e.tenantId }, select: { taskSettings: true } }))?.taskSettings as any) ?? {};
     if (gen.onClientCreate === false) return 0;
-    const templates = (await this.withSettings(e.tenantId, await this.prisma.processTemplate.findMany({
-      where: { OR: [{ tenantId: e.tenantId }, { tenantId: null }], recurrence: 'MENSAL' },
-      include: { steps: { orderBy: { order: 'asc' } } },
-    }))).filter((t) => templateApplies(t, client));
-    const competence = competenceForRun(new Date());
-    const holidays = await this.holidays();
-    let created = 0;
-    for (const t of templates) created += (await this.createProcess(e.tenantId, t, client, competence, holidays)) ? 1 : 0;
+    // Cliente novo: tarefas que vencem neste mês e, se já passou do dia de geração, as do mês seguinte
+    const now = new Date();
+    let created = (await this.generateForMonth(e.tenantId, now.toISOString().slice(0, 7), { clientIds: [e.clientId] })).created;
+    if (now.getUTCDate() >= (await this.generationDay(e.tenantId))) created += (await this.generateForMonth(e.tenantId, nextMonth(now), { clientIds: [e.clientId] })).created;
     return created;
   }
 
@@ -234,9 +269,10 @@ export class TasksService {
     assertOpen(task.process.status);
     if (task.blocked) throw new BadRequestException('Etapa bloqueada: conclua a anterior (cascata).');
     if (task.attachment !== 'OPCIONAL' && task.attachments.length === 0 && task.process.files.length === 0) {
-      throw new BadRequestException('Anexe o arquivo desta etapa (ou em "Arquivos para entregar") antes de marcar.');
+      throw new BadRequestException('Esta etapa exige anexo: coloque o arquivo em "Arquivos para entregar" antes de marcar.');
     }
     await this.prisma.processTask.update({ where: { id: taskId }, data: { done: true, doneAt: new Date(), doneById: userId } });
+    await this.history(tenantId, userId, task.process, 'Marcou a etapa', `${task.order}. ${task.title}`, 'ETAPA');
     if (sendToClient) {
       for (const a of task.attachments.filter((x) => !x.sentToClientAt)) {
         await this.dispatch.sendFile(tenantId, task.process.clientId, a.fileKey, a.fileName, ['EMAIL', 'WHATSAPP']);
@@ -260,6 +296,7 @@ export class TasksService {
       for (const t of task.process.tasks.filter((x) => x.order > task.order && !x.done)) await this.prisma.processTask.update({ where: { id: t.id }, data: { blocked: true } });
     }
     await this.prisma.auditLog.create({ data: { tenantId, userId, clientId: task.process.clientId, action: 'etapa.desmarcar', entity: 'ProcessTask', entityId: taskId } });
+    await this.history(tenantId, userId, task.process, 'Desmarcou a etapa', `${task.order}. ${task.title}`, 'ETAPA');
     return { ok: true };
   }
 
@@ -271,6 +308,7 @@ export class TasksService {
     assertOpen(p.status, true);
     if (!files?.length) throw new BadRequestException('Nenhum arquivo enviado.');
     await this.prisma.processFile.createMany({ data: files.map((f) => ({ processId, fileKey: f.fileKey, fileName: f.fileName, size: f.size ?? 0, mime: f.mime ?? null, uploadedById: userId })) });
+    await this.history(tenantId, userId, p, `Anexou ${files.length === 1 ? 'o arquivo' : `${files.length} arquivos`}`, files.map((f) => f.fileName).join(', '), 'ARQUIVO');
     if (p.status === 'A_FAZER') await this.prisma.process.update({ where: { id: processId }, data: { status: 'EM_PROGRESSO' } });
     return this.prisma.processFile.findMany({ where: { processId }, orderBy: { createdAt: 'asc' } });
   }
@@ -282,6 +320,7 @@ export class TasksService {
     if (f.sentAt) throw new BadRequestException('Este arquivo já foi entregue ao cliente e consta no protocolo.');
     await this.prisma.processFile.delete({ where: { id: fileId } });
     await this.prisma.auditLog.create({ data: { tenantId, userId, clientId: p.clientId, action: 'tarefa.arquivo_remover', entity: 'Process', entityId: processId, meta: { fileName: f.fileName } } });
+    await this.history(tenantId, userId, p, 'Tirou o arquivo', f.fileName, 'ARQUIVO');
     return { removed: true };
   }
 
@@ -299,8 +338,8 @@ export class TasksService {
     if (p.status === 'IMPEDIMENTO') throw new BadRequestException('Tarefa com impedimento: reabra quando o impedimento for resolvido.');
     this.config.assertPopComplete(p);
     const hasFiles = p.files.length > 0 || p.tasks.some((t) => t.attachments.length > 0);
-    const needs = p.tasks.find((t) => !t.done && t.attachment !== 'OPCIONAL');
-    if (needs && !hasFiles) throw new BadRequestException(`Anexe os arquivos que serão entregues (etapa "${needs.title}" exige anexo).`);
+    const needsFiles = p.requireFiles || p.tasks.some((t) => t.attachment !== 'OPCIONAL');
+    if (needsFiles && !hasFiles) throw new BadRequestException('Esta tarefa exige anexo: coloque pelo menos um documento antes de concluir.');
     const now = new Date();
     await this.prisma.processTask.updateMany({ where: { processId, done: false }, data: { done: true, doneAt: now, doneById: userId, blocked: false } });
     const done = await this.doneStage(tenantId);
@@ -355,9 +394,100 @@ export class TasksService {
     return { status: 'EM_PROGRESSO' };
   }
 
-  /** Histórico da tarefa (aparece nos comentários). */
-  private history(tenantId: string, userId: string, p: { id: string }, what: string, detail?: string) {
-    return this.prisma.taskComment.create({ data: { processId: p.id, authorId: userId, body: `● ${what}${detail ? `: ${detail}` : ''}` } }).catch(() => undefined);
+  /** Histórico da tarefa (aba Histórico): quem fez, o quê e quando. */
+  private async history(tenantId: string, userId: string, p: { id: string }, what: string, detail?: string, kind = 'STATUS') {
+    const u = userId && userId !== 'monitor' ? await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } }).catch(() => null) : null;
+    return logEvent(this.prisma, { tenantId, processId: p.id, kind, actorId: userId, actorName: u?.name ?? (userId === 'monitor' ? 'Monitor' : null), actorType: u ? 'USUARIO' : 'SISTEMA', text: `${what}${detail ? `: ${detail}` : ''}` });
+  }
+
+  /** Histórico completo: eventos + comentários, do mais antigo para o mais novo. */
+  async timeline(tenantId: string, processId: string) {
+    await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    const [events, comments, users] = await Promise.all([
+      this.prisma.processEvent.findMany({ where: { processId }, orderBy: { at: 'asc' } }),
+      this.prisma.taskComment.findMany({ where: { processId }, orderBy: { at: 'asc' } }),
+      this.prisma.user.findMany({ where: { tenantId }, select: { id: true, name: true } }),
+    ]);
+    const name = (id: string | null) => users.find((u) => u.id === id)?.name ?? null;
+    return [
+      ...events.map((e) => ({ id: e.id, at: e.at, kind: e.kind, actorType: e.actorType, actorName: e.actorName ?? name(e.actorId), text: e.text, meta: e.meta })),
+      ...comments.map((c) => ({ id: c.id, at: c.at, kind: c.body.startsWith('💬') ? 'CONVERSA' : 'COMENTARIO', actorType: 'USUARIO', actorName: name(c.authorId), text: c.body, meta: null })),
+    ].sort((a, b) => +new Date(a.at) - +new Date(b.at));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tarefa avulsa, transferência e conversa do atendimento
+  // ---------------------------------------------------------------------------
+  /** Tarefa avulsa para qualquer mês: o vencimento define a competência (pode ser trocada). */
+  async createManual(tenantId: string, user: { sub: string; name?: string }, b: {
+    clientId: string; title: string; description?: string | null; dueDate: string; competence?: string | null; assigneeId?: string | null;
+    departmentId?: string | null; popId?: string | null; requireFiles?: boolean; templateId?: string | null; steps?: string[];
+  }) {
+    const client = await this.prisma.clientCompany.findFirstOrThrow({ where: { id: b.clientId, tenantId }, include: { responsibles: true } });
+    const due = new Date(`${b.dueDate.slice(0, 10)}T12:00:00Z`);
+    if (Number.isNaN(+due)) throw new BadRequestException('Vencimento inválido.');
+    const competence = b.competence || b.dueDate.slice(0, 7);
+    const tpl = b.templateId ? await this.prisma.processTemplate.findFirstOrThrow({ where: { id: b.templateId, OR: [{ tenantId }, { tenantId: null }] }, include: { steps: { orderBy: { order: 'asc' } } } }) : null;
+    const deptId = b.departmentId ?? tpl?.departmentId ?? null;
+    const resp = client.responsibles.find((r) => r.departmentId === deptId);
+    const defaults = await this.config.processDefaults(tenantId, tpl?.id);
+    const pop = b.popId ? await this.prisma.pop.findFirstOrThrow({ where: { id: b.popId } }) : null;
+    const steps = tpl ? tpl.steps.map((s) => ({ order: s.order, title: s.title, attachment: s.attachment, priority: s.priority })) : (b.steps?.filter((x) => x.trim()).length ? b.steps.filter((x) => x.trim()) : ['Executar']).map((title, i) => ({ order: i + 1, title, attachment: 'OPCIONAL' as const, priority: 'MEDIA' as const }));
+    const p = await this.prisma.process.create({
+      data: {
+        tenantId, clientId: client.id, templateId: null, title: b.title.trim() || tpl?.name || 'Tarefa avulsa', competence, dueDate: due,
+        ...defaults, ...(pop ? { popId: pop.id, popTitle: pop.title, popItems: pop.items as any } : {}),
+        requireFiles: !!b.requireFiles || steps.some((s) => s.attachment !== 'OPCIONAL'),
+        assigneeIds: b.assigneeId ? [b.assigneeId] : resp ? [resp.userId] : [user.sub],
+        departmentIds: deptId ? [deptId] : [],
+        tasks: { create: steps.map((s) => ({ ...s, dueDate: due })) },
+      },
+    });
+    if (b.description?.trim()) await this.prisma.taskComment.create({ data: { processId: p.id, authorId: user.sub, body: b.description.trim() } });
+    await logEvent(this.prisma, { tenantId, processId: p.id, kind: 'CRIADA', actorId: user.sub, actorName: user.name, text: `Tarefa avulsa criada (competência ${competence.split('-').reverse().join('/')}, vence ${due.toLocaleDateString('pt-BR', { timeZone: 'UTC' })})` });
+    return p;
+  }
+
+  /** Transferir a tarefa para outro colaborador (avisa no sino de quem recebeu). */
+  async transfer(tenantId: string, user: { sub: string; name?: string }, processId: string, toUserId: string, note?: string) {
+    const [p, to] = await Promise.all([
+      this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId }, include: { client: { select: { legalName: true } } } }),
+      this.prisma.user.findFirstOrThrow({ where: { id: toUserId, tenantId, active: true } }),
+    ]);
+    const before = await this.prisma.user.findMany({ where: { id: { in: p.assigneeIds } }, select: { name: true } });
+    await this.prisma.process.update({ where: { id: processId }, data: { assigneeIds: [to.id] } });
+    await logEvent(this.prisma, { tenantId, processId, kind: 'TRANSFERIDA', actorId: user.sub, actorName: user.name, text: `Transferida de ${before.map((u) => u.name).join(', ') || 'ninguém'} para ${to.name}${note?.trim() ? ` — ${note.trim()}` : ''}` });
+    if (to.id !== user.sub) {
+      await this.notifications.notify({ tenantId, userId: to.id, clientId: p.clientId, kind: 'TAREFA_TRANSFERIDA', title: `${user.name ?? 'Um colega'} transferiu uma tarefa para você`, body: `${p.title} — ${p.client.legalName}${note?.trim() ? `: ${note.trim()}` : ''}`, link: `/tarefas?processo=${p.id}` }).catch(() => undefined);
+    }
+    return { assigneeIds: [to.id] };
+  }
+
+  /** Atendimentos (WhatsApp) do cliente da tarefa, para trazer a conversa para os comentários. */
+  async conversations(tenantId: string, processId: string) {
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    const rows = await this.prisma.conversation.findMany({
+      where: { tenantId, clientId: p.clientId }, orderBy: { openedAt: 'desc' }, take: 20,
+      include: { messages: { orderBy: { sentAt: 'asc' }, select: { id: true, direction: true, body: true, sentAt: true, authorUserId: true, signature: true, mediaType: true } } },
+    });
+    return rows.map((c) => ({ id: c.id, openedAt: c.openedAt, closedAt: c.closedAt, status: c.status, phone: c.contactPhone, summary: c.aiSummary, messages: c.messages }));
+  }
+
+  async importConversation(tenantId: string, user: { sub: string; name?: string }, processId: string, conversationId: string, messageIds?: string[]) {
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId }, include: { client: { select: { legalName: true } } } });
+    const c = await this.prisma.conversation.findFirstOrThrow({ where: { id: conversationId, tenantId, clientId: p.clientId }, include: { messages: { orderBy: { sentAt: 'asc' } } } });
+    const msgs = c.messages.filter((m) => !messageIds?.length || messageIds.includes(m.id));
+    if (!msgs.length) throw new BadRequestException('Nenhuma mensagem selecionada.');
+    const users = await this.prisma.user.findMany({ where: { tenantId }, select: { id: true, name: true } });
+    const fmt = (d: Date) => d.toLocaleString('pt-BR', { timeZone: 'America/Maceio', dateStyle: 'short', timeStyle: 'short' });
+    const lines = msgs.map((m) => {
+      const who = m.direction === 'IN' ? p.client.legalName : (m.signature ?? users.find((u) => u.id === m.authorUserId)?.name ?? 'Escritório');
+      return `[${fmt(m.sentAt)}] ${who}: ${m.body ?? (m.mediaType ? `(${m.mediaType})` : '')}`;
+    });
+    const body = `💬 Conversa do atendimento (${fmt(c.openedAt)}${c.contactPhone ? ` · ${c.contactPhone}` : ''})\n${lines.join('\n')}`;
+    const comment = await this.prisma.taskComment.create({ data: { processId, authorId: user.sub, body: body.slice(0, 20000) } });
+    await logEvent(this.prisma, { tenantId, processId, kind: 'CONVERSA', actorId: user.sub, actorName: user.name, text: `Trouxe ${msgs.length} mensagem(ns) do atendimento para a tarefa` });
+    return comment;
   }
 
   private async doneStage(tenantId: string) {
@@ -447,7 +577,12 @@ export class TasksService {
   }
 
 
-  async bulkUpdate(tenantId: string, ids: string[], data: { assigneeIds?: string[]; dueDate?: string; departmentIds?: string[] }) {
+  async bulkUpdate(tenantId: string, ids: string[], data: { assigneeIds?: string[]; dueDate?: string; departmentIds?: string[] }, by?: { sub: string; name?: string }) {
+    if (data.assigneeIds?.length && by) {
+      const names = (await this.prisma.user.findMany({ where: { id: { in: data.assigneeIds } }, select: { name: true } })).map((u) => u.name).join(', ');
+      for (const id of ids) await logEvent(this.prisma, { tenantId, processId: id, kind: 'TRANSFERIDA', actorId: by.sub, actorName: by.name, text: `Transferida em lote para ${names}` });
+    }
+    if (data.dueDate && by) for (const id of ids) await logEvent(this.prisma, { tenantId, processId: id, kind: 'PRAZO', actorId: by.sub, actorName: by.name, text: `Vencimento alterado para ${data.dueDate.split('-').reverse().join('/')}` });
     return this.prisma.process.updateMany({
       where: { tenantId, id: { in: ids } },
       data: { ...data, dueDate: data.dueDate ? new Date(data.dueDate) : undefined },

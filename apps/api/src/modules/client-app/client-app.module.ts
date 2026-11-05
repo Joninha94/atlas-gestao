@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+import { logEvent } from '../tasks/process-events';
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Injectable, Module, Param, Post, Put, Query } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { z } from 'zod';
@@ -169,15 +171,23 @@ export class ClientAppController {
   @Get('deliveries/:id')
   async delivery(@CurrentUser() u: AuthUser, @Param('id') id: string) {
     const d = await this.prisma.deliveryNote.findFirstOrThrow({ where: { id, clientId: u.clientId! }, include: { process: { select: { title: true, competence: true, completedAt: true } } } });
+    // Link rastreado deste contato no app: abrir e baixar entram no histórico da tarefa com o nome de quem fez
+    let link = await this.prisma.deliveryLink.findFirst({ where: { deliveryId: id, channel: 'APP', recipient: u.sub } });
+    link ??= await this.prisma.deliveryLink.create({ data: { token: randomBytes(18).toString('base64url'), tenantId: d.tenantId, deliveryId: id, processId: d.processId, channel: 'APP', recipient: u.sub, contactName: u.name ?? null } });
+    if (!link.openedAt) {
+      await this.prisma.deliveryLink.update({ where: { token: link.token }, data: { openedAt: new Date() } });
+      await logEvent(this.prisma, { tenantId: d.tenantId, processId: d.processId, kind: 'RECEBIDO', actorType: 'CLIENTE', actorId: u.sub, actorName: u.name, text: `${u.name ?? 'Cliente'} abriu a entrega no aplicativo`, meta: { channel: 'APP' } });
+    }
     if (!d.viewedAt) {
       await this.prisma.deliveryNote.update({ where: { id }, data: { viewedAt: new Date() } });
       await this.prisma.auditLog.create({ data: { tenantId: d.tenantId, clientId: d.clientId, action: 'entrega.visualizada', entity: 'DeliveryNote', entityId: id, meta: { contactId: u.sub } } });
     }
+    const pub = (process.env.PUBLIC_API_URL ?? '').replace(/\/$/, '');
     const nro = String(d.number).padStart(6, '0');
     return {
       id: d.id, number: nro, title: d.process.title, competence: d.process.competence, message: d.message, createdAt: d.createdAt,
-      protocolUrl: d.pdfKey ? await this.storage.signedUrl(d.pdfKey, 600, `Protocolo_${nro}.pdf`) : null,
-      files: await Promise.all((d.files as { name: string; key: string }[]).map(async (f) => ({ name: f.name, url: await this.storage.signedUrl(f.key, 600, f.name) }))),
+      protocolUrl: d.pdfKey ? `${pub}/d/${link.token}/p` : null,
+      files: (d.files as { name: string }[]).map((f, i) => ({ name: f.name, url: `${pub}/d/${link!.token}/${i}` })),
     };
   }
 

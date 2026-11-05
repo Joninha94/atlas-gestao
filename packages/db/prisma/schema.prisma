@@ -983,6 +983,7 @@ model Process {
   impedimentById   String?
   dismissedAt      DateTime?
   dismissedById    String?
+  requireFiles Boolean         @default(false) // só conclui com pelo menos um arquivo anexado
   files        ProcessFile[]   // arquivos que serão entregues ao cliente
   deliveries   DeliveryNote[]
   comments     TaskComment[]
@@ -1276,4 +1277,36 @@ model DeliveryNote {
 
   @@unique([tenantId, number])
   @@index([clientId, createdAt])
+}
+
+/** Histórico da tarefa: tudo o que aconteceu (quem, o quê, quando), inclusive recebimento e download pelo cliente. */
+model ProcessEvent {
+  id        String   @id @default(uuid())
+  tenantId  String
+  processId String
+  at        DateTime @default(now())
+  kind      String   // CRIADA, ARQUIVO, POP, ETAPA, STATUS, TRANSFERIDA, ENVIO, RECEBIDO, LIDO, VISUALIZADO, BAIXADO, CONVERSA
+  actorType String   @default("USUARIO") // USUARIO | CLIENTE | SISTEMA
+  actorId   String?
+  actorName String?
+  text      String
+  meta      Json?
+
+  @@index([processId, at])
+}
+
+/** Link rastreado por destinatário de uma nota de envio (e-mail, WhatsApp, app). */
+model DeliveryLink {
+  token       String    @id
+  tenantId    String
+  deliveryId  String
+  processId   String
+  channel     String
+  recipient   String
+  contactName String?
+  externalIds String[]  @default([]) // ids das mensagens de WhatsApp (status entregue/lido)
+  openedAt    DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([deliveryId])
 }
