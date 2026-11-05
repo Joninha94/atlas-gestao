@@ -53,6 +53,7 @@ const UpdateClientSchema = z.object({
   uf: z.string().length(2).transform((v) => v.toUpperCase()).optional(),
   zipCode: z.string().transform((v) => v.replace(/\D/g, '')).optional(),
   legalRepName: z.string().max(150).optional(),
+  monthlyFee: z.number().min(0).max(10_000_000).nullable().optional(),
   appAccess: z.boolean().optional(),
   appPlus: z.boolean().optional(),
   active: z.boolean().optional(),

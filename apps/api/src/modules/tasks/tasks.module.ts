@@ -12,6 +12,7 @@ import { TaskConfigController } from './task-config.controller';
 import { TaskConfigService } from './task-config.service';
 import { DriveModule } from '../drive/drive.module';
 import { clientSearch } from './client-search';
+import { ReportsService, assertMonth } from './reports.service';
 import { DeliveryTrackingController, DeliveryTrackingService } from './delivery-tracking.controller';
 
 const StepSchema = z.object({
@@ -62,6 +63,8 @@ const TemplateSchema = z.object({
   monitorLink: z.enum(['SIMPLES', 'MEI', 'DCTFWEB', 'FGTS', 'PARCELAMENTOS']).nullish().or(z.literal('').transform(() => null)),
   steps: z.array(StepSchema).default([]), // etapas são opcionais: POP e anexos já guiam a tarefa
   documents: DocsSchema.default([]),
+  points: z.number().int().min(0).max(100).default(1),
+  serviceValue: z.number().min(0).max(10_000_000).nullish(),
 });
 
 /** Vínculos do escritório editados junto com o modelo (POP, agrupador, aviso ao cliente). */
@@ -74,7 +77,7 @@ const LinkSchema = z.object({
 
 @Controller('tasks')
 export class TasksController {
-  constructor(private readonly tasks: TasksService, private readonly prisma: PrismaService, private readonly ai: AiGatewayService, private readonly storage: StorageService) {}
+  constructor(private readonly tasks: TasksService, private readonly prisma: PrismaService, private readonly ai: AiGatewayService, private readonly storage: StorageService, private readonly reportsSvc: ReportsService) {}
 
   @Get('dashboard')
   dashboard(@CurrentUser() u: AuthUser) {
@@ -208,6 +211,18 @@ export class TasksController {
     return this.tasks.completeTask(u.tenantId, u.sub, id, !!b?.sendToClient);
   }
 
+  /** Relatórios do sistema (Configurar → Relatórios). */
+  @Get('reports')
+  reports() {
+    return this.reportsSvc.list();
+  }
+
+  @Get('reports/:id')
+  report(@CurrentUser() u: AuthUser, @Param('id') id: string, @Query('month') month?: string, @Query('days') days?: string, @Query('departmentId') departmentId?: string, @Query('userId') userId?: string, @Query('clientId') clientId?: string) {
+    assertMonth(month);
+    return this.reportsSvc.run(u.tenantId, id, { month, days: Number(days) || undefined, departmentId, userId, clientId });
+  }
+
   /** Gerar agora as tarefas que vencem no mês escolhido (padrão: mês seguinte). Antecipa a geração do dia 25. */
   @Post('generate')
   @RequirePermission(PERMISSIONS.TASKS_MANAGE)
@@ -226,6 +241,7 @@ export class TasksController {
       assigneeId: z.string().uuid().nullish().or(z.literal('')), departmentId: z.string().uuid().nullish().or(z.literal('')), popId: z.string().uuid().nullish().or(z.literal('')),
       templateId: z.string().uuid().nullish().or(z.literal('')), requireFiles: z.boolean().default(false), steps: z.array(z.string().max(200)).max(30).optional(),
       documents: DocsSchema.optional(),
+      points: z.number().int().min(0).max(100).optional(), serviceValue: z.number().min(0).max(10_000_000).nullish(),
     }).refine((x) => x.title.trim().length >= 3 || !!x.templateId, { message: 'Dê um título à tarefa (mínimo 3 letras) ou escolha um modelo' }).parse(body);
     return this.tasks.createManual(u.tenantId, { sub: u.sub, name: u.name }, {
       ...b, competence: b.competence || null, assigneeId: b.assigneeId || null, departmentId: b.departmentId || null, popId: b.popId || null, templateId: b.templateId || null,
@@ -287,6 +303,33 @@ export class TasksController {
   }
 
   /** Marcar se o arquivo vai para o cliente e a qual anexo ele corresponde. */
+  /** Apontamento de horas na tarefa. */
+  @Get('processes/:id/time')
+  timeList(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.tasks.timeEntries(u.tenantId, id);
+  }
+
+  @Post('processes/:id/time')
+  timeAdd(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() body: unknown) {
+    const b = z.object({
+      minutes: z.number().int().min(1, 'Informe o tempo').max(24 * 60, 'Máximo de 24 horas por apontamento'),
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), note: z.string().max(300).nullish(), userId: z.string().uuid().optional(),
+    }).parse(body);
+    return this.tasks.addTime(u.tenantId, { sub: u.sub, name: u.name, role: u.role }, id, b);
+  }
+
+  @Delete('processes/:id/time/:entryId')
+  timeDelete(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('entryId') entryId: string) {
+    return this.tasks.deleteTime(u.tenantId, { sub: u.sub, name: u.name, role: u.role }, id, entryId);
+  }
+
+  /** Pontuação e valor da solicitação de serviço desta tarefa. */
+  @Put('processes/:id/values')
+  setValues(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() body: unknown) {
+    const b = z.object({ points: z.number().int().min(0).max(100).optional(), serviceValue: z.number().min(0).max(10_000_000).nullable().optional() }).parse(body);
+    return this.tasks.setValues(u.tenantId, { sub: u.sub, name: u.name }, id, b);
+  }
+
   @Put('processes/:id/files/:fileId')
   updateFile(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('fileId') fileId: string, @Body() b: { sendToClient?: boolean; slotId?: string | null }) {
     return this.tasks.updateFile(u.tenantId, { sub: u.sub, name: u.name }, id, fileId, b ?? {});
@@ -435,7 +478,7 @@ export class TasksController {
 @Module({
   imports: [DriveModule],
   controllers: [TasksController, TaskConfigController, DeliveryTrackingController],
-  providers: [TasksService, TaskConfigService, DeliveryTrackingService],
+  providers: [TasksService, TaskConfigService, DeliveryTrackingService, ReportsService],
   exports: [TasksService, TaskConfigService],
 })
 export class TasksModule {}

@@ -6,6 +6,7 @@ import {
   ArrowDown, ArrowLeft, ArrowUp, Building2, CheckCircle2, ChevronRight, ClipboardList, FileText, GitBranch, Mail, Plus,
   Repeat, ShieldCheck, Trash2, UserCog, Users, XCircle, Inbox, Play,
 } from 'lucide-react';
+import { Relatorios } from './relatorios';
 import { apiDelete, apiGet, apiPost, apiPut, download } from '../../lib/api';
 import { useAction, useApi } from '../../lib/hooks';
 import { competence, dateTime, doc, label, lastCompetence } from '../../lib/format';
@@ -14,7 +15,7 @@ import { Badge, Button, Card, Empty, Field, Loading, Modal, Select, Table, Month
 type Sec =
   | 'regimes' | 'agr-clientes' | 'agr-tarefas' | 'horarios' | 'geracao' | 'recorrentes' | 'pops' | 'avulsos'
   | 'fluxos' | 'fluxo-tarefas' | 'colunas' | 'documentos' | 'app-users' | 'responsabilidades' | 'adequacao'
-  | 'mensagens' | 'remetente' | 'dominio';
+  | 'mensagens' | 'remetente' | 'dominio' | 'relatorios';
 
 type LinkItem = { label: string; sec?: Sec; href?: string; tab?: string; count?: number };
 
@@ -23,6 +24,7 @@ const TITLES: Record<Sec, string> = {
   geracao: 'Geração de tarefas', recorrentes: 'Tarefas recorrentes', pops: 'POPs — Procedimentos Operacionais Padrão', avulsos: 'Tarefas de solicitações de serviço',
   fluxos: 'Fluxos de tarefas', 'fluxo-tarefas': 'Tarefas de fluxo', colunas: 'Colunas do quadro', documentos: 'Templates de documentos',
   'app-users': 'Usuários de clientes', responsabilidades: 'Responsabilidades', adequacao: 'Adequação de agrupadores de tarefas',
+  relatorios: 'Relatórios do sistema',
   mensagens: 'Templates de envio (e-mail, WhatsApp e app)', remetente: 'Endereço customizado', dominio: 'Auditoria do domínio de e-mail',
 };
 
@@ -54,6 +56,7 @@ export function Configurar({ onOpenTab }: { onOpenTab: (tab: string) => void }) 
         {sec === 'mensagens' && <Messages />}
         {sec === 'remetente' && <Sender />}
         {sec === 'dominio' && <DomainAudit />}
+        {sec === 'relatorios' && <Relatorios />}
       </div>
     );
   }
@@ -95,6 +98,13 @@ export function Configurar({ onOpenTab }: { onOpenTab: (tab: string) => void }) 
     { title: 'E-mail e WhatsApp', icon: <Mail size={18} />, items: [
       { label: 'Templates de envio', sec: 'mensagens' },
       { label: 'Endereço customizado', sec: 'remetente' },
+    ] },
+    { title: 'Relatórios do sistema', icon: <FileText size={18} />, items: [
+      { label: 'Tarefas (cliente, colaborador, departamento, empresa, regime)', sec: 'relatorios' },
+      { label: 'Prazos, multas e impedimentos', sec: 'relatorios' },
+      { label: 'Entregas e baixa de documentos', sec: 'relatorios' },
+      { label: 'Apontamento, pontuação e mensalidade', sec: 'relatorios' },
+      { label: 'Certificados a vencer', sec: 'relatorios' },
     ] },
     { title: 'Auditoria', icon: <ShieldCheck size={18} />, items: [
       { label: 'Gerenciar', href: '/configuracoes?tab=auditoria' },

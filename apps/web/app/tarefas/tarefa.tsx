@@ -267,6 +267,9 @@ export function TaskPanel({ id, onClose, onChange }: { id: string; onClose: () =
           </section>
         )}
 
+        {/* Horas e valores */}
+        <HorasValores id={id} p={p} onChange={refresh} />
+
         {/* 4. Envios ao cliente */}
         {p.deliveries?.length > 0 && (
           <section className="rounded-lg border border-slate-200 bg-white">
@@ -463,7 +466,7 @@ export function NewTaskModal({ onClose, onCreated }: { onClose: () => void; onCr
   const { data: pops } = useApi<any[]>('/tasks/config/pops');
   const { data: templates } = useApi<any[]>('/tasks/templates');
   const today = new Date().toISOString().slice(0, 10);
-  const [f, setF] = useState({ clientId: '', q: '', templateId: '', title: '', dueDate: today, competence: today.slice(0, 7), compTouched: false, assigneeId: '', departmentId: '', popId: '', requireFiles: false, steps: '', description: '', docs: '' });
+  const [f, setF] = useState({ clientId: '', q: '', templateId: '', title: '', dueDate: today, competence: today.slice(0, 7), compTouched: false, assigneeId: '', departmentId: '', popId: '', requireFiles: false, steps: '', description: '', docs: '', valor: '', points: '' });
   const { busy, run } = useAction();
   const list = (clients ?? []).filter((c) => !f.q || `${c.legalName} ${c.tradeName ?? ''} ${c.document}`.toLowerCase().includes(f.q.toLowerCase().replace(/[./-]/g, ''))).slice(0, 50);
   const avulsos = (templates ?? []).filter((t) => t.recurrence === 'NENHUMA');
@@ -476,6 +479,8 @@ export function NewTaskModal({ onClose, onCreated }: { onClose: () => void; onCr
           clientId: f.clientId, templateId: f.templateId || undefined, title: f.title, dueDate: f.dueDate, competence: f.competence, assigneeId: f.assigneeId || undefined,
           departmentId: f.departmentId || undefined, popId: f.popId || undefined, requireFiles: f.requireFiles, description: f.description || undefined,
           steps: f.templateId ? undefined : f.steps.split('\n').map((x) => x.trim()).filter(Boolean),
+          serviceValue: f.valor.trim() ? Number(f.valor.replace(/\./g, '').replace(',', '.')) || undefined : undefined,
+          points: f.points ? Number(f.points) : undefined,
           documents: f.docs.trim() ? f.docs.split('\n').map((x) => x.trim()).filter((x) => x.length >= 2).map((name) => ({ name, required: true, send: true })) : undefined,
         });
         onCreated(p.id);
@@ -524,6 +529,10 @@ export function NewTaskModal({ onClose, onCreated }: { onClose: () => void; onCr
         </label>
         <Field label={tpl?.documents?.length ? `Anexos exigidos (vazio = do modelo: ${tpl.documents.map((d: any) => d.name).join(', ')})` : 'Anexos exigidos (um por linha, opcional)'}><textarea className="input" rows={3} value={f.docs} onChange={(e) => setF({ ...f, docs: e.target.value })} placeholder={'Contrato social\nComprovante de endereço'} /></Field>
         {!f.templateId && <Field label="Etapas (uma por linha, opcional)"><textarea className="input" rows={3} value={f.steps} onChange={(e) => setF({ ...f, steps: e.target.value })} placeholder={'Solicitar documentos\nElaborar\nRevisar'} /></Field>}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Valor da SS (R$)" hint="Solicitação de serviço cobrada à parte."><input className="input" inputMode="decimal" value={f.valor} onChange={(e) => setF({ ...f, valor: e.target.value })} placeholder={tpl?.serviceValue ? String(tpl.serviceValue).replace('.', ',') : '0,00'} /></Field>
+          <Field label="Pontuação"><input type="number" min={0} max={100} className="input" value={f.points} onChange={(e) => setF({ ...f, points: e.target.value })} placeholder={String(tpl?.points ?? 1)} /></Field>
+        </div>
         <Field label="Observação (vai para o histórico)"><textarea className="input" rows={3} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
       </div>
     </Modal>
@@ -562,5 +571,79 @@ function AddDocSlot({ docs, onSave }: { docs: { id: string; name: string; requir
       <Button size="sm" disabled={name.trim().length < 2}>Adicionar</Button>
       <Button size="sm" variant="ghost" type="button" onClick={() => setOpen(false)}>Cancelar</Button>
     </form>
+  );
+}
+
+const hm = (min: number) => `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}`;
+/** "1:30", "1h30", "90", "1,5h" → minutos. */
+function parseTempo(v: string) {
+  const t = v.trim().toLowerCase().replace(',', '.');
+  let m = /^(\d{1,2})[:h](\d{1,2})m?$/.exec(t);
+  if (m) return Number(m[1]) * 60 + Number(m[2]);
+  m = /^(\d+(?:\.\d+)?)h$/.exec(t);
+  if (m) return Math.round(Number(m[1]) * 60);
+  m = /^(\d+)(?:min|m)?$/.exec(t);
+  return m ? Number(m[1]) : 0;
+}
+
+/** Apontamento de horas (manual ou cronômetro), pontuação e valor da solicitação de serviço. */
+function HorasValores({ id, p, onChange }: { id: string; p: any; onChange: () => void }) {
+  const { data, reload } = useApi<{ total: number; entries: any[] }>(`/tasks/processes/${id}/time`);
+  const key = `produtiva.timer.${id}`;
+  const [startedAt, setStartedAt] = useState<number | null>(() => { try { return Number(localStorage.getItem(key)) || null; } catch { return null; } });
+  const [now, setNow] = useState(Date.now());
+  const [tempo, setTempo] = useState('');
+  const [nota, setNota] = useState('');
+  const [dia, setDia] = useState(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Maceio' }));
+  const [points, setPoints] = useState(String(p.points ?? 1));
+  const [valor, setValor] = useState(p.serviceValue != null ? String(Number(p.serviceValue).toFixed(2)).replace('.', ',') : '');
+  const { busy, run } = useAction();
+  useEffect(() => { if (!startedAt) return; const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, [startedAt]);
+  const running = startedAt ? Math.floor((now - startedAt) / 1000) : 0;
+  const start = () => { const t = Date.now(); setStartedAt(t); try { localStorage.setItem(key, String(t)); } catch { /* sem storage */ } };
+  const stop = () => {
+    const min = Math.max(1, Math.round((Date.now() - (startedAt ?? Date.now())) / 60000));
+    setStartedAt(null); try { localStorage.removeItem(key); } catch { /* sem storage */ }
+    setTempo(hm(min).replace('h', ':'));
+  };
+  const minutos = parseTempo(tempo);
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white">
+      <h3 className="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5 text-sm font-semibold">
+        <span className="flex-1">Horas e valores</span>
+        <span className="text-xs font-normal text-ink-muted">Total apontado: <b className="text-ink">{hm(data?.total ?? 0)}</b></span>
+      </h3>
+      <div className="space-y-3 p-4">
+        <div className="flex flex-wrap items-end gap-2">
+          {startedAt
+            ? <Button variant="danger" size="sm" onClick={stop}>■ Parar {String(Math.floor(running / 3600)).padStart(2, '0')}:{String(Math.floor((running % 3600) / 60)).padStart(2, '0')}:{String(running % 60).padStart(2, '0')}</Button>
+            : <Button variant="secondary" size="sm" onClick={start}>▶ Iniciar cronômetro</Button>}
+          <label className="text-xs text-ink-muted">Tempo<input className="input mt-0.5 w-24" value={tempo} onChange={(e) => setTempo(e.target.value)} placeholder="1:30" aria-label="Tempo (ex.: 1:30)" /></label>
+          <label className="text-xs text-ink-muted">Dia<input type="date" className="input mt-0.5 w-40" value={dia} onChange={(e) => setDia(e.target.value)} /></label>
+          <label className="min-w-[10rem] flex-1 text-xs text-ink-muted">O que foi feito (opcional)<input className="input mt-0.5" value={nota} onChange={(e) => setNota(e.target.value)} /></label>
+          <Button size="sm" disabled={busy || minutos < 1} onClick={() => run(async () => { await apiPost(`/tasks/processes/${id}/time`, { minutes: minutos, date: dia, note: nota || undefined }); setTempo(''); setNota(''); reload(); onChange(); }, `Apontado ${hm(minutos)}.`)}>Apontar horas</Button>
+        </div>
+        {data && data.entries.length > 0 && (
+          <ul className="divide-y divide-slate-100 rounded-md border border-slate-100 text-sm">
+            {data.entries.map((e) => (
+              <li key={e.id} className="flex items-center gap-3 px-3 py-1.5">
+                <span className="w-24 tabular-nums text-ink-muted">{date(e.date)}</span>
+                <span className="w-14 font-medium tabular-nums">{hm(e.minutes)}</span>
+                <span className="w-32 truncate">{e.userName}</span>
+                <span className="min-w-0 flex-1 truncate text-ink-muted">{e.note ?? ''}</span>
+                <button aria-label="Apagar apontamento" className="rounded p-1 text-red-500 hover:bg-red-50" onClick={() => run(async () => { await apiDelete(`/tasks/processes/${id}/time/${e.id}`); reload(); onChange(); })}><Trash2 size={14} /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
+          <label className="text-xs text-ink-muted">Pontuação<input type="number" min={0} max={100} className="input mt-0.5 w-24" value={points} onChange={(e) => setPoints(e.target.value)}
+            onBlur={() => Number(points) !== p.points && run(async () => { await apiPut(`/tasks/processes/${id}/values`, { points: Math.max(0, Number(points) || 0) }); onChange(); }, 'Pontuação salva.')} /></label>
+          <label className="text-xs text-ink-muted">Valor da solicitação de serviço (R$)<input className="input mt-0.5 w-40" inputMode="decimal" value={valor} onChange={(e) => setValor(e.target.value)} placeholder="0,00"
+            onBlur={() => run(async () => { const v = valor.trim() ? Number(valor.replace(/\./g, '').replace(',', '.')) : null; await apiPut(`/tasks/processes/${id}/values`, { serviceValue: v != null && !Number.isNaN(v) ? v : null }); onChange(); })} /></label>
+          <span className="pb-2 text-xs text-ink-muted">Usados nos relatórios de pontuação, mensalidade e valor de SS.</span>
+        </div>
+      </div>
+    </section>
   );
 }

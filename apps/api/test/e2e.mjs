@@ -895,6 +895,38 @@ await step('Modelo sem etapas pode ser salvo e gera tarefa; erros de validação
   await assert.rejects(post('/tasks/config/flows', { name: 'Fluxo', steps: [] }), /pelo menos 2 passos/);
 });
 
+await step('Relatórios do sistema: apontamento de horas, pontuação, mensalidade, SS, baixas e certificados', async () => {
+  const list = await get('/tasks/reports');
+  for (const t of ['Análise Cliente por Mensalidade', 'Apontamento Mensal por Cliente', 'Apontamento Mensal por Usuário', 'Documentos sem Template Vinculado', 'Lista de Certificados a Vencer',
+    'Pontuação Mensal por Cliente', 'Pontuação Mensal por Usuário', 'Relação Mensal dos Certificados a Vencer', 'Status Geral de Baixa com Template Vinculado', 'Status de Baixa por Departamento e Usuário',
+    'Status de Baixa dos Documentos', 'Tarefas Fechadas com Multa', 'Tarefas Fechadas em Atraso', 'Tarefas não Baixadas', 'Tarefas por Cliente', 'Tarefas por Colaborador', 'Tarefas por Departamento',
+    'Tarefas por Empresa', 'Tarefas por Regime', 'Valor de SS por Cliente']) assert.ok(list.some((r) => r.title === t), `relatório ${t}`);
+  // Mensalidade do cliente, SS avulsa com horas apontadas e concluída
+  await put(`/clients/${ctx.clientId}`, { monthlyFee: 850 });
+  const month = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 7);
+  const ss = await post('/tasks/processes', { clientId: ctx.clientId, title: 'Alteração contratual', dueDate: `${month}-28`, serviceValue: 450, points: 5 });
+  await post(`/tasks/processes/${ss.id}/time`, { minutes: 90, note: 'Redação do aditivo' });
+  await post(`/tasks/processes/${ss.id}/time`, { minutes: 30 });
+  assert.equal((await get(`/tasks/processes/${ss.id}/time`)).total, 120);
+  await assert.rejects(post(`/tasks/processes/${ss.id}/time`, { minutes: 0 }), /Informe o tempo/);
+  await post(`/tasks/processes/${ss.id}/conclude`, {});
+  const run = (id, q = '') => get(`/tasks/reports/${id}?month=${month}${q}`);
+  const fee = (await run('analise-cliente-mensalidade')).rows.find((r) => r.cnpj.replace(/\D/g, '') === ctx.doc);
+  assert.equal(fee.mensalidade, 850);
+  assert.equal(fee.ss, 450);
+  assert.ok(fee.horas >= 120 && fee.porHora > 0);
+  assert.ok((await run('valor-ss-por-cliente')).rows.some((r) => r.valor >= 450));
+  const apUser = await run('apontamento-mensal-usuario');
+  assert.ok(apUser.rows.some((r) => r.horas >= 120));
+  const pts = await run('pontuacao-mensal-usuario');
+  assert.ok(pts.totals.pontos >= 5);
+  for (const r of list) {
+    const out = await run(r.id);
+    assert.ok(Array.isArray(out.rows) && out.columns.length >= 2, `${r.id} roda`);
+  }
+  await assert.rejects(get('/tasks/reports/nao-existe'), /404/);
+});
+
 await step('job que falha de vez vira alerta no painel e pode ser reprocessado', async () => {
   const me = await get('/auth/me');
   const q = new Queue('monitor', { connection: conn, prefix: process.env.QUEUE_PREFIX ?? 'produtiva' });

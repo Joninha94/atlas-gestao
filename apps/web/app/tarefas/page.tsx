@@ -219,6 +219,10 @@ function Templates() {
     for (const k of ['id', 'tenantId', 'createdByAi', 'estimatedHours', 'targetDay', 'deadlineMode', 'deadline', 'popTitle', 'popItems', 'openProcesses', 'createdAt', 'updatedAt']) delete body[k];
     body.dueBusinessDay = body.dueBusinessDay || null; body.notes = body.notes || null; body.category = body.category || null;
     body.documents = (edit.documents ?? []).filter((d: any) => d.name?.trim().length >= 2);
+    body.points = Number(edit.points ?? 1);
+    if (edit.serviceValueText !== undefined) body.serviceValue = edit.serviceValueText.trim() ? Number(edit.serviceValueText.replace(/\./g, '').replace(',', '.')) || null : null;
+    else body.serviceValue = edit.serviceValue != null ? Number(edit.serviceValue) : null;
+    delete body.serviceValueText;
     const r = edit.id ? await apiPut<any>(`/tasks/templates/${edit.id}`, body) : await apiPost<any>('/tasks/templates', body);
     setEdit(null); setPopDraft(null); reload(); reloadPops();
     return r;
@@ -346,6 +350,10 @@ function Templates() {
               <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={!!edit.applyPopToOpen} onChange={(e) => setEdit({ ...edit, applyPopToOpen: e.target.checked })} /> Aplicar o POP e os anexos também nas {edit.openProcesses} tarefa(s) já geradas e abertas</label>
             )}
           </section>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Pontuação" hint="Peso da tarefa nos relatórios de pontuação (ex.: Folha 3, DAS 1)."><input type="number" min={0} max={100} className="input" value={edit.points ?? 1} onChange={(e) => setEdit({ ...edit, points: Math.max(0, Number(e.target.value) || 0) })} /></Field>
+            <Field label="Valor da solicitação de serviço (R$)" hint="Para serviços avulsos cobrados à parte (relatório Valor de SS)."><input className="input" inputMode="decimal" value={edit.serviceValueText ?? (edit.serviceValue != null ? String(edit.serviceValue).replace('.', ',') : '')} onChange={(e) => setEdit({ ...edit, serviceValueText: e.target.value })} placeholder="0,00" /></Field>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Agrupador de tarefas" hint="Só gera para clientes marcados com este agrupador."><Select className="w-full" value={edit.groupId ?? ''} onChange={(v) => setEdit({ ...edit, groupId: v })} placeholder="Todos os clientes do regime" options={(groups ?? []).map((g) => ({ value: g.id, label: g.name }))} /></Field>
             <label className="mt-6 flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={edit.notifyClient !== false} onChange={(e) => setEdit({ ...edit, notifyClient: e.target.checked })} /><span>Ao concluir, enviar ao cliente<span className="block text-xs text-ink-muted">E-mail, WhatsApp e app, com a nota de envio.</span></span></label>

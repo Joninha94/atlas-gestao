@@ -116,6 +116,8 @@ export class TasksService {
           tenantId,
           requireFiles: t.steps.some((s: any) => s.attachment !== 'OPCIONAL') || docsOf(t).some((d) => d.required),
           documents: docsOf(t) as any,
+          points: t.points ?? 1,
+          serviceValue: t.serviceValue ?? null,
           templateId: t.id,
           clientId: client.id,
           title: t.name,
@@ -563,7 +565,7 @@ export class TasksService {
     const now = new Date();
     await this.prisma.processTask.updateMany({ where: { processId, done: false }, data: { done: true, doneAt: now, doneById: userId, blocked: false } });
     const done = await this.doneStage(tenantId);
-    await this.prisma.process.update({ where: { id: processId }, data: { status: 'CONCLUIDO', completedAt: now, ...(done ? { stageId: done } : {}) } });
+    await this.prisma.process.update({ where: { id: processId }, data: { status: 'CONCLUIDO', completedAt: now, completedById: userId, ...(done ? { stageId: done } : {}) } });
     notify ??= await this.config.shouldNotify(tenantId, p.templateId);
     let aviso: any = null;
     if (notify) aviso = await this.config.deliver(tenantId, processId, { userId, userName: opts.userName, message: opts.message }).catch((e) => ({ errors: [(e as Error).message] }));
@@ -604,7 +606,7 @@ export class TasksService {
     await this.prisma.process.update({
       where: { id: processId },
       data: {
-        status: 'EM_PROGRESSO', completedAt: null, notifiedAt: null, impedimentReason: null, impedimentAt: null, impedimentById: null,
+        status: 'EM_PROGRESSO', completedAt: null, completedById: null, notifiedAt: null, impedimentReason: null, impedimentAt: null, impedimentById: null,
         dismissReason: null, dismissedAt: null, dismissedById: null, ...(stage ? { stageId: stage.id } : {}),
       },
     });
@@ -612,6 +614,44 @@ export class TasksService {
     await this.history(tenantId, userId, p, `Reaberta (estava ${de})`, reason?.trim() || undefined);
     await this.prisma.auditLog.create({ data: { tenantId, userId, clientId: p.clientId, action: 'process.reabrir', entity: 'Process', entityId: processId, meta: { from: p.status, reason } } });
     return { status: 'EM_PROGRESSO' };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Apontamento de horas e valores da tarefa
+  // ---------------------------------------------------------------------------
+  async timeEntries(tenantId: string, processId: string) {
+    await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    const [rows, users] = await Promise.all([
+      this.prisma.timeEntry.findMany({ where: { processId }, orderBy: [{ date: 'desc' }, { createdAt: 'desc' }] }),
+      this.prisma.user.findMany({ where: { tenantId }, select: { id: true, name: true } }),
+    ]);
+    return { total: rows.reduce((a, r) => a + r.minutes, 0), entries: rows.map((r) => ({ ...r, userName: users.find((u) => u.id === r.userId)?.name ?? '—' })) };
+  }
+
+  async addTime(tenantId: string, user: { sub: string; name?: string; role?: string }, processId: string, b: { minutes: number; date?: string; note?: string | null; userId?: string }) {
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    const userId = b.userId && ['ADMIN', 'GESTOR'].includes(user.role ?? '') ? b.userId : user.sub;
+    const date = new Date(`${b.date ?? new Date().toLocaleDateString('en-CA', { timeZone: 'America/Maceio' })}T00:00:00Z`);
+    const e = await this.prisma.timeEntry.create({ data: { tenantId, processId, userId, date, minutes: b.minutes, note: b.note?.trim() || null } });
+    const h = `${Math.floor(b.minutes / 60)}h${String(b.minutes % 60).padStart(2, '0')}`;
+    await logEvent(this.prisma, { tenantId, processId: p.id, kind: 'APONTAMENTO', actorId: user.sub, actorName: user.name, text: `Apontou ${h}${b.note?.trim() ? ` — ${b.note.trim()}` : ''}` });
+    if (p.status === 'A_FAZER') await this.prisma.process.update({ where: { id: p.id }, data: { status: 'EM_PROGRESSO' } });
+    return e;
+  }
+
+  async deleteTime(tenantId: string, user: { sub: string; name?: string; role?: string }, processId: string, entryId: string) {
+    const e = await this.prisma.timeEntry.findFirstOrThrow({ where: { id: entryId, processId, tenantId } });
+    if (e.userId !== user.sub && !['ADMIN', 'GESTOR'].includes(user.role ?? '')) throw new BadRequestException('Só quem apontou (ou um gestor) pode apagar.');
+    await this.prisma.timeEntry.delete({ where: { id: entryId } });
+    await logEvent(this.prisma, { tenantId, processId, kind: 'APONTAMENTO', actorId: user.sub, actorName: user.name, text: `Apagou um apontamento de ${e.minutes} min` });
+    return { deleted: true };
+  }
+
+  async setValues(tenantId: string, user: { sub: string; name?: string }, processId: string, b: { points?: number; serviceValue?: number | null }) {
+    await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    const r = await this.prisma.process.update({ where: { id: processId }, data: b, select: { points: true, serviceValue: true } });
+    await logEvent(this.prisma, { tenantId, processId, kind: 'VALORES', actorId: user.sub, actorName: user.name, text: [b.points !== undefined ? `Pontuação: ${b.points}` : '', b.serviceValue !== undefined ? `Valor da SS: ${b.serviceValue == null ? '—' : `R$ ${Number(b.serviceValue).toFixed(2).replace('.', ',')}`}` : ''].filter(Boolean).join(' · ') });
+    return r;
   }
 
   /** Histórico da tarefa (aba Histórico): quem fez, o quê e quando. */
@@ -643,6 +683,7 @@ export class TasksService {
     clientId: string; title: string; description?: string | null; dueDate: string; competence?: string | null; assigneeId?: string | null;
     departmentId?: string | null; popId?: string | null; requireFiles?: boolean; templateId?: string | null; steps?: string[];
     documents?: { id: string; name: string; required: boolean; send: boolean }[];
+    points?: number; serviceValue?: number | null;
   }) {
     const client = await this.prisma.clientCompany.findFirstOrThrow({ where: { id: b.clientId, tenantId }, include: { responsibles: true } });
     const due = new Date(`${b.dueDate.slice(0, 10)}T12:00:00Z`);
@@ -659,6 +700,8 @@ export class TasksService {
         tenantId, clientId: client.id, templateId: null, title: b.title.trim() || tpl?.name || 'Tarefa avulsa', competence, dueDate: due,
         ...defaults, ...(pop ? { popId: pop.id, popTitle: pop.title, popItems: pop.items as any } : {}),
         documents: (b.documents ?? (tpl ? docsOf(tpl) : [])) as any,
+        points: b.points ?? tpl?.points ?? 1,
+        serviceValue: b.serviceValue ?? (tpl?.serviceValue as any) ?? null,
         requireFiles: !!b.requireFiles || steps.some((s) => s.attachment !== 'OPCIONAL') || (b.documents ?? (tpl ? docsOf(tpl) : [])).some((d) => d.required),
         assigneeIds: b.assigneeId ? [b.assigneeId] : resp ? [resp.userId] : [user.sub],
         departmentIds: deptId ? [deptId] : [],

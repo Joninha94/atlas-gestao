@@ -130,6 +130,7 @@ async function main() {
       monitorLink: t.monitorLink ?? null,
       notes: t.notes ?? null,
       estimatedHours: t.hours ?? null,
+      points: Math.max(1, Math.round(t.hours ?? 1)),
       documents: ANEXOS_POR_MODELO[t.name] ?? [],
     };
     const steps = t.steps.map((title, i) => ({

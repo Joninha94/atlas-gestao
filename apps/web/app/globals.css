@@ -117,3 +117,13 @@ body {
 /* Busca: usa o "x" do próprio sistema, não o nativo do navegador */
 input[type='search']::-webkit-search-cancel-button,
 input[type='search']::-webkit-search-decoration { -webkit-appearance: none; display: none; }
+
+/* Impressão / PDF de relatório: só o relatório aparece */
+@media print {
+  @page { size: A4 landscape; margin: 12mm; }
+  body.printing-report { background: #fff !important; }
+  body.printing-report * { visibility: hidden; }
+  body.printing-report #report-print, body.printing-report #report-print * { visibility: visible; }
+  body.printing-report #report-print { position: absolute; left: 0; top: 0; width: 100%; }
+  body.printing-report #report-print table { font-size: 10px; }
+}

@@ -88,7 +88,7 @@ function Checkup({ id }: { id: string }) {
 }
 
 function Dados({ c, reload }: { c: any; reload: () => void }) {
-  const [form, setForm] = useState({ regime: c.regime, tradeName: c.tradeName ?? '', stateRegistration: c.stateRegistration ?? '', municipalRegistration: c.municipalRegistration ?? '', notes: c.notes ?? '', active: c.active, street: c.street ?? '', district: c.district ?? '', city: c.city ?? '', uf: c.uf ?? '', zipCode: c.zipCode ?? '', legalRepName: c.legalRepName ?? (Array.isArray(c.partners) ? c.partners[0]?.name ?? '' : '') });
+  const [form, setForm] = useState({ regime: c.regime, tradeName: c.tradeName ?? '', stateRegistration: c.stateRegistration ?? '', municipalRegistration: c.municipalRegistration ?? '', notes: c.notes ?? '', active: c.active, street: c.street ?? '', district: c.district ?? '', city: c.city ?? '', uf: c.uf ?? '', zipCode: c.zipCode ?? '', legalRepName: c.legalRepName ?? (Array.isArray(c.partners) ? c.partners[0]?.name ?? '' : ''), monthlyFee: c.monthlyFee != null ? Number(c.monthlyFee).toFixed(2).replace('.', ',') : '' });
   const { busy, run } = useAction();
   const partners: any[] = Array.isArray(c.partners) ? c.partners : [];
   return (
@@ -126,9 +126,12 @@ function Dados({ c, reload }: { c: any; reload: () => void }) {
             <input className="input" list={`socios-${c.id}`} value={form.legalRepName} onChange={(e) => setForm({ ...form, legalRepName: e.target.value })} />
             <datalist id={`socios-${c.id}`}>{partners.map((p, i) => <option key={i} value={p.name} />)}</datalist>
           </Field>
+          <Field label="Mensalidade (honorário mensal, R$)" hint="Usada no relatório Análise Cliente por Mensalidade.">
+            <input className="input w-48" inputMode="decimal" value={form.monthlyFee} onChange={(e) => setForm({ ...form, monthlyFee: e.target.value })} placeholder="0,00" />
+          </Field>
           <Field label="Observações"><textarea className="input" rows={4} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} /> Cliente ativo</label>
-          <Button disabled={busy} onClick={() => run(() => apiPut(`/clients/${c.id}`, { ...form, uf: form.uf || undefined }).then(reload), 'Salvo.')}>Salvar</Button>
+          <Button disabled={busy} onClick={() => run(() => apiPut(`/clients/${c.id}`, { ...form, uf: form.uf || undefined, monthlyFee: form.monthlyFee.trim() ? Number(form.monthlyFee.replace(/\./g, '').replace(',', '.')) : null }).then(reload), 'Salvo.')}>Salvar</Button>
         </div>
       </Card>
     </div>
