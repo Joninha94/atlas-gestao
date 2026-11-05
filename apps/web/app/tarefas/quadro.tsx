@@ -3,15 +3,17 @@ import clsx from 'clsx';
 import { useState } from 'react';
 import { ClipboardCheck, GitBranch } from 'lucide-react';
 import { apiPut } from '../../lib/api';
-import { useAction, useApi } from '../../lib/hooks';
+import { useAction, useApi, useDebounced } from '../../lib/hooks';
 import { competence, date, lastCompetence } from '../../lib/format';
-import { Badge, Card, Empty, Loading, Select } from '../../components/ui';
+import { Badge, Card, Empty, Loading, Select, MonthInput, SearchInput } from '../../components/ui';
 import { TaskPanel } from './tarefa';
 
 /** Quadro (Kanban): arraste o cartão entre as colunas do escritório. "Concluído" passa pelas travas de etapas e POP. */
 export function Board() {
   const [f, setF] = useState({ competence: lastCompetence(), assigneeId: '', departmentId: '', clientGroupId: '' });
-  const q = new URLSearchParams(Object.fromEntries(Object.entries(f).filter(([, v]) => v))).toString();
+  const [search, setSearch] = useState('');
+  const busca = useDebounced(search.trim());
+  const q = new URLSearchParams(Object.fromEntries(Object.entries({ ...f, q: busca }).filter(([, v]) => v))).toString();
   const { data, reload, setData } = useApi<{ stages: any[]; cards: any[] }>(`/tasks/board?${q}`);
   const { data: users } = useApi<any[]>('/users');
   const { data: deps } = useApi<any[]>('/departments');
@@ -37,7 +39,8 @@ export function Board() {
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <input type="month" className="input w-40" value={f.competence} onChange={(e) => setF({ ...f, competence: e.target.value })} aria-label="Competência" />
+        <SearchInput className="w-full sm:w-64" value={search} onChange={setSearch} placeholder="Pesquisar empresa (nome ou CNPJ)" />
+        <MonthInput value={f.competence} onChange={(v: string) => setF({ ...f, competence: v })} allowEmpty />
         <Select value={f.assigneeId} onChange={(v) => setF({ ...f, assigneeId: v })} placeholder="Todos os responsáveis" options={(users ?? []).map((u) => ({ value: u.id, label: u.name }))} />
         <Select value={f.departmentId} onChange={(v) => setF({ ...f, departmentId: v })} placeholder="Todos os setores" options={(deps ?? []).map((d) => ({ value: d.id, label: d.name }))} />
         <Select value={f.clientGroupId} onChange={(v) => setF({ ...f, clientGroupId: v })} placeholder="Todos os grupos de clientes" options={(groups ?? []).map((g) => ({ value: g.id, label: g.name }))} />

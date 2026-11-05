@@ -11,6 +11,7 @@ import { DispatchService } from '../../integrations/dispatch.service';
 import { TaskConfigService } from './task-config.service';
 import { NotificationsService } from '../../integrations/notifications.service';
 import { logEvent } from './process-events';
+import { clientSearch } from './client-search';
 
 @Injectable()
 export class TasksService {
@@ -653,11 +654,11 @@ export class TasksService {
   }
 
   /** Quadro: colunas do escritório com os processos abertos (e os concluídos nos últimos 15 dias). */
-  async board(tenantId: string, f: { assigneeId?: string; departmentId?: string; competence?: string; clientGroupId?: string }) {
+  async board(tenantId: string, f: { assigneeId?: string; departmentId?: string; competence?: string; clientGroupId?: string; q?: string }) {
     const stages = await this.prisma.boardStage.findMany({ where: { tenantId }, orderBy: { order: 'asc' } });
     const processes = await this.prisma.process.findMany({
       where: {
-        tenantId, client: { active: true, ...(f.clientGroupId ? { clientGroupIds: { has: f.clientGroupId } } : {}) }, competence: f.competence,
+        tenantId, client: { active: true, ...(f.clientGroupId ? { clientGroupIds: { has: f.clientGroupId } } : {}), ...clientSearch(f.q) }, competence: f.competence,
         OR: [{ status: { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA', 'IMPEDIMENTO'] } }, { status: 'CONCLUIDO', completedAt: { gte: new Date(Date.now() - 15 * 86_400_000) } }],
         ...(f.assigneeId ? { assigneeIds: { has: f.assigneeId } } : {}),
         ...(f.departmentId ? { departmentIds: { has: f.departmentId } } : {}),

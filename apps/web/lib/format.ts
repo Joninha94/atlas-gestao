@@ -1,10 +1,47 @@
 export const brl = (v: number | string | null | undefined) =>
   Number(v ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-export const date = (v?: string | Date | null) => (v ? new Date(v).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '—');
+export const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+const MES3 = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 
-export const dateTime = (v?: string | Date | null) =>
-  v ? new Date(v).toLocaleString('pt-BR', { timeZone: 'America/Maceio', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+/** Data legível: "05 nov 2026" (datas de vencimento são gravadas ao meio-dia UTC). */
+export const date = (v?: string | Date | null) => {
+  if (!v) return '—';
+  const d = new Date(v);
+  if (Number.isNaN(+d)) return '—';
+  return `${String(d.getUTCDate()).padStart(2, '0')} ${MES3[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+};
+
+/** Data e hora no fuso de Maceió: "05 nov 2026, 14:32" (sem o ano quando é o ano atual). */
+export const dateTime = (v?: string | Date | null) => {
+  if (!v) return '—';
+  const d = new Date(v);
+  if (Number.isNaN(+d)) return '—';
+  const p = Object.fromEntries(new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Maceio', day: '2-digit', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(d).map((x) => [x.type, x.value]));
+  const year = Number(p.year) === new Date().getFullYear() ? '' : ` ${p.year}`;
+  return `${p.day} ${MES3[Number(p.month) - 1]}${year}, ${p.hour}:${p.minute}`;
+};
+
+/** Prazo relativo a hoje (Maceió): "hoje", "amanhã", "em 5 dias", "atrasada há 3 dias". */
+export const relativeDue = (v?: string | Date | null): { text: string; tone: 'red' | 'amber' | 'muted' } | null => {
+  if (!v) return null;
+  const d = new Date(v);
+  const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Maceio' }));
+  const a = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const b = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const days = Math.round((a - b) / 86_400_000);
+  if (days === 0) return { text: 'vence hoje', tone: 'amber' };
+  if (days === 1) return { text: 'vence amanhã', tone: 'amber' };
+  if (days > 1) return { text: `em ${days} dias`, tone: days <= 5 ? 'amber' : 'muted' };
+  return { text: days === -1 ? 'venceu ontem' : `venceu há ${-days} dias`, tone: 'red' };
+};
+
+/** "2026-10" → "outubro de 2026". */
+export const monthLabel = (c?: string | null) => {
+  if (!c || !/^\d{4}-\d{2}$/.test(c)) return '—';
+  const [y, m] = c.split('-').map(Number);
+  return `${MESES[m - 1]} de ${y}`;
+};
 
 export const competence = (c?: string | null) => (c ? c.split('-').reverse().join('/') : '—');
 

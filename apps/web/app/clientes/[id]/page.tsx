@@ -7,7 +7,7 @@ import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recha
 import { apiDelete, apiPost, apiPut, download } from '../../../lib/api';
 import { useAction, useApi } from '../../../lib/hooks';
 import { brl, competence, date, dateTime, doc, label } from '../../../lib/format';
-import { Badge, Bar as Meter, Button, Card, Field, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Table, Tabs } from '../../../components/ui';
+import { Badge, Bar as Meter, Button, Card, Field, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Table, Tabs, MonthInput } from '../../../components/ui';
 
 type Tab = 'checkup' | 'dados' | 'contatos' | 'certificado' | 'app' | 'historico' | 'obrigacoes';
 
@@ -31,7 +31,7 @@ export default function ClienteDetalhe() {
       />
       <Modal open={fat !== null} title="Relação de Faturamento" onClose={() => setFat(null)} footer={<Button disabled={busy || !fat} onClick={() => run(async () => { await download(`/clients/${id}/pdf/faturamento?ate=${fat}`, `relacao_faturamento_${c.document}_${fat}.pdf`); setFat(null); }, 'PDF no papel timbrado, assinado digitalmente pelo escritório.')}><FileSignature size={14} /> Gerar PDF assinado</Button>}>
         <p className="text-sm text-ink-soft">Declaração no papel timbrado do escritório com os 12 meses de faturamento (PGDAS-D ou, sem ele, notas de saída e serviços), assinatura do contador responsável e do representante da empresa.</p>
-        <Field label="Último mês do período" hint={fat ? `Período: ${periodo(fat)}` : undefined}><input type="month" className="input w-48" value={fat ?? ''} onChange={(e) => setFat(e.target.value)} /></Field>
+        <Field label="Último mês do período" hint={fat ? `Período: ${periodo(fat)}` : undefined}><MonthInput value={fat ?? ''} onChange={(v: string) => setFat(v)} /></Field>
         <p className="text-xs text-ink-muted">Confira antes: endereço e representante em <b>Dados cadastrais</b>; contador responsável e dados do escritório em <b>Configurações → Escritório</b>.</p>
       </Modal>
       <Tabs value={tab} onChange={setTab} tabs={[{ id: 'checkup', label: 'Checkup 360' }, { id: 'dados', label: 'Dados cadastrais' }, { id: 'contatos', label: 'Contatos e responsáveis' }, { id: 'obrigacoes', label: 'Obrigações' }, { id: 'certificado', label: 'Certificado e procuração' }, { id: 'app', label: 'Aplicativo' }, { id: 'historico', label: 'Histórico' }]} />

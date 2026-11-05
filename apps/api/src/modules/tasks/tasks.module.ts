@@ -11,6 +11,7 @@ import { describeDeadline, TasksService } from './tasks.service';
 import { TaskConfigController } from './task-config.controller';
 import { TaskConfigService } from './task-config.service';
 import { DriveModule } from '../drive/drive.module';
+import { clientSearch } from './client-search';
 import { DeliveryTrackingController, DeliveryTrackingService } from './delivery-tracking.controller';
 
 const StepSchema = z.object({
@@ -92,17 +93,18 @@ export class TasksController {
     @Query('departmentId') departmentId?: string,
     @Query('assigneeId') assigneeId?: string,
     @Query('competence') competence?: string,
+    @Query('q') q?: string,
   ) {
     return this.prisma.process.findMany({
       where: {
         tenantId: u.tenantId,
-        client: { active: true },
+        client: { active: true, ...clientSearch(q) },
         status: status === 'ABERTA' ? { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA'] } : (status as any),
         competence,
         ...(departmentId ? { departmentIds: { has: departmentId } } : {}),
         ...(assigneeId ? { assigneeIds: { has: assigneeId } } : {}),
       },
-      include: { client: { select: { legalName: true } }, tasks: { include: { attachments: true } }, _count: { select: { files: true } } },
+      include: { client: { select: { legalName: true, tradeName: true, document: true } }, tasks: { include: { attachments: true } }, _count: { select: { files: true } } },
       orderBy: { dueDate: 'asc' },
       take: 1000,
     });
@@ -411,3 +413,4 @@ export class TasksController {
   exports: [TasksService, TaskConfigService],
 })
 export class TasksModule {}
+

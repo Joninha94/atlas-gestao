@@ -9,7 +9,7 @@ import {
 import { apiDelete, apiGet, apiPost, apiPut, download } from '../../lib/api';
 import { useAction, useApi } from '../../lib/hooks';
 import { competence, dateTime, doc, label, lastCompetence } from '../../lib/format';
-import { Badge, Button, Card, Empty, Field, Loading, Modal, Select, Table } from '../../components/ui';
+import { Badge, Button, Card, Empty, Field, Loading, Modal, Select, Table, MonthInput } from '../../components/ui';
 
 type Sec =
   | 'regimes' | 'agr-clientes' | 'agr-tarefas' | 'horarios' | 'geracao' | 'recorrentes' | 'pops' | 'avulsos'
@@ -439,7 +439,7 @@ function Flows() {
         footer={<Button disabled={busy || !start?.clientId} onClick={() => run(async () => { await apiPost(`/tasks/config/flows/${start.flow.id}/start`, { clientId: start.clientId, competence: start.competence }); setStart(null); }, '1º passo criado. Os próximos nascem quando cada um for concluído.')}>Iniciar fluxo</Button>}>
         {start && <>
           <Field label="Cliente"><Select className="w-full" value={start.clientId} onChange={(v) => setStart({ ...start, clientId: v })} placeholder="Escolha…" options={(clients ?? []).map((c) => ({ value: c.id, label: `${c.legalName} · ${doc(c.document)}` }))} /></Field>
-          <Field label="Competência"><input type="month" className="input" value={start.competence} onChange={(e) => setStart({ ...start, competence: e.target.value })} /></Field>
+          <Field label="Competência"><MonthInput value={start.competence} onChange={(v: string) => setStart({ ...start, competence: v })} /></Field>
         </>}
       </Modal>
     </Card>
@@ -564,7 +564,7 @@ function Documents() {
         })}>Baixar PDF</Button>}>
         {gen && <>
           <Field label="Cliente"><Select className="w-full" value={gen.clientId} onChange={(v) => setGen({ ...gen, clientId: v })} placeholder="Escolha…" options={(clients ?? []).map((c) => ({ value: c.id, label: `${c.legalName} · ${doc(c.document)}` }))} /></Field>
-          <Field label="Competência"><input type="month" className="input" value={gen.competencia} onChange={(e) => setGen({ ...gen, competencia: e.target.value })} /></Field>
+          <Field label="Competência"><MonthInput value={gen.competencia} onChange={(v: string) => setGen({ ...gen, competencia: v })} /></Field>
         </>}
       </Modal>
     </Card>

@@ -11,8 +11,42 @@ body {
 }
 
 @layer components {
+  /* Campo padrão do sistema: mesma altura, borda, cantos e foco em inputs, selects e datas */
   .input {
-    @apply w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50;
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-ink shadow-sm shadow-slate-900/[0.03] outline-none transition
+      placeholder:text-slate-400 hover:border-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-ink-muted;
+  }
+  input.input:not([type='color']):not([type='file']),
+  select.input,
+  button.input {
+    @apply h-9 py-0 leading-9;
+  }
+  /* Select igual ao input (Safari/Chrome): sem o visual nativo, com a mesma seta */
+  select.input:not([size]):not([multiple]) {
+    -webkit-appearance: none;
+    appearance: none;
+    padding-right: 2rem;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    background-size: 16px;
+    text-overflow: ellipsis;
+  }
+  select.input[size],
+  select.input[multiple] {
+    @apply h-auto py-1 leading-normal;
+  }
+  input.input[type='date'],
+  input.input[type='time'],
+  input.input[type='datetime-local'] {
+    -webkit-appearance: none;
+    appearance: none;
+    @apply tabular-nums;
+  }
+  input.input[type='date']::-webkit-date-and-time-value { text-align: left; }
+  input.input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.55; cursor: pointer; }
+  textarea.input {
+    @apply min-h-[2.25rem] leading-relaxed;
   }
   .label {
     @apply mb-1 block text-xs font-medium text-ink-soft;
@@ -27,3 +61,59 @@ body {
     @apply text-brand-700 hover:text-brand-800 hover:underline;
   }
 }
+
+/* Caixas de seleção e opções padronizadas (todas as telas) */
+@layer base {
+  input[type='checkbox'],
+  input[type='radio'] {
+    -webkit-appearance: none;
+    appearance: none;
+    flex-shrink: 0;
+    display: inline-grid;
+    place-content: center;
+    width: 1.05rem;
+    height: 1.05rem;
+    margin: 0;
+    vertical-align: middle;
+    cursor: pointer;
+    border: 1.5px solid #94a3b8;
+    background: #fff;
+    transition: background-color 0.12s, border-color 0.12s, box-shadow 0.12s;
+  }
+  input[type='checkbox'] { border-radius: 0.3rem; }
+  input[type='radio'] { border-radius: 9999px; }
+  input[type='checkbox']::before {
+    content: '';
+    width: 0.62rem;
+    height: 0.62rem;
+    transform: scale(0);
+    transition: transform 0.12s ease-out;
+    background: #fff;
+    clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+  }
+  input[type='radio']::before {
+    content: '';
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    transform: scale(0);
+    transition: transform 0.12s ease-out;
+    background: #1d7871;
+  }
+  input[type='checkbox']:hover:not(:disabled),
+  input[type='radio']:hover:not(:disabled) { border-color: #28968b; }
+  input[type='checkbox']:checked { background: #1d7871; border-color: #1d7871; }
+  input[type='checkbox']:checked::before,
+  input[type='radio']:checked::before { transform: scale(1); }
+  input[type='radio']:checked { border-color: #1d7871; }
+  input[type='checkbox']:indeterminate { background: #1d7871; border-color: #1d7871; }
+  input[type='checkbox']:indeterminate::before { transform: scale(1); clip-path: inset(40% 10% 40% 10%); }
+  input[type='checkbox']:focus-visible,
+  input[type='radio']:focus-visible { outline: none; box-shadow: 0 0 0 3px rgb(40 150 139 / 0.25); }
+  input[type='checkbox']:disabled,
+  input[type='radio']:disabled { cursor: not-allowed; opacity: 0.45; }
+}
+
+/* Busca: usa o "x" do próprio sistema, não o nativo do navegador */
+input[type='search']::-webkit-search-cancel-button,
+input[type='search']::-webkit-search-decoration { -webkit-appearance: none; display: none; }

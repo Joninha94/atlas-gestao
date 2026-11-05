@@ -6,7 +6,7 @@ import { Download, Eye, Mail, MessageCircle, Play, RefreshCw, Send, Smartphone }
 import { apiPost, apiPut, openSigned } from '../../lib/api';
 import { useAction, useApi } from '../../lib/hooks';
 import { brl, competence, date, dateTime, label, lastCompetence } from '../../lib/format';
-import { Badge, Bar, Button, Card, Empty, Field, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Table, Tabs } from '../../components/ui';
+import { Badge, Bar, Button, Card, Empty, Field, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Table, Tabs, MonthInput } from '../../components/ui';
 
 type Tab = 'guias' | 'sublimite' | 'declaracoes' | 'caixa' | 'parcelamentos' | 'situacao' | 'comprovantes' | 'parametros';
 
@@ -82,7 +82,7 @@ function Guides({ initialStatus, onChange }: { initialStatus: string; onChange: 
         <Select value={f.type} onChange={(v) => setF({ ...f, type: v })} placeholder="Todas as guias" options={['DAS_SIMPLES', 'DAS_MEI', 'DCTFWEB_DARF', 'FGTS_MENSAL', 'FGTS_RESCISORIA', 'FGTS_MISTA', 'PARCELAMENTO'].map((v) => ({ value: v, label: label(v) }))} />
         <Select value={f.status} onChange={(v) => setF({ ...f, status: v })} placeholder="Todas as situações" options={['PENDENTE', 'ENVIADA', 'VISUALIZADA', 'PAGA', 'VENCIDA'].map((v) => ({ value: v, label: label(v) }))} />
         <Select value={f.dispatch} onChange={(v) => setF({ ...f, dispatch: v })} placeholder="Qualquer envio" options={[{ value: 'SEM_ENVIO', label: 'Não enviadas' }, { value: 'NAO_VISUALIZADA', label: 'Enviadas e não visualizadas' }, { value: 'COM_ERRO', label: 'Com erro de envio' }]} />
-        <input className="input w-36" type="month" value={f.competence} onChange={(e) => setF({ ...f, competence: e.target.value })} />
+        <MonthInput value={f.competence} onChange={(v: string) => setF({ ...f, competence: v })} allowEmpty />
         <div className="ml-auto flex gap-2">
           <Button variant="secondary" size="sm" disabled={!sel.size || busy} onClick={() => run(() => apiPost('/monitor/guides/batch-resend', { guideIds: [...sel] }).then(reload), 'Guias reenviadas.')}>
             <Send size={14} /> Reenviar {sel.size || ''}
@@ -157,7 +157,7 @@ function Sublimit() {
   const [comp, setComp] = useState(lastCompetence());
   const { data } = useApi<any[]>(`/monitor/sublimit?competence=${comp}`);
   return (
-    <Card title="Régua do sublimite (R$ 3,6 mi) — receita dos últimos 12 meses" actions={<input type="month" className="input w-40" value={comp} onChange={(e) => setComp(e.target.value)} />} pad={false}>
+    <Card title="Régua do sublimite (R$ 3,6 mi) — receita dos últimos 12 meses" actions={<MonthInput value={comp} onChange={(v: string) => setComp(v)} />} pad={false}>
       {!data ? <Loading /> : (
         <Table empty={!data.length} head={['Cliente', 'Acumulado 12 meses', 'Do sublimite', '', 'Situação']}>
           {data.map((c) => (

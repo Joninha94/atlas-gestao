@@ -8,7 +8,7 @@ import {
 import { apiDelete, apiPost, apiPut, openSigned, uploadFiles } from '../../lib/api';
 import { useAction, useApi } from '../../lib/hooks';
 import { competence, date, dateTime, doc } from '../../lib/format';
-import { Badge, Button, Field, Loading, Modal, StatusBadge } from '../../components/ui';
+import { Badge, Button, Field, Loading, Modal, StatusBadge, MonthInput } from '../../components/ui';
 
 const OPEN = ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA'];
 
@@ -499,7 +499,7 @@ export function NewTaskModal({ onClose, onCreated }: { onClose: () => void; onCr
         <Field label="Vencimento" hint="Pode ser este mês ou qualquer outro.">
           <input type="date" className="input" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value, competence: f.compTouched ? f.competence : e.target.value.slice(0, 7) })} />
         </Field>
-        <Field label="Competência"><input type="month" className="input" value={f.competence} onChange={(e) => setF({ ...f, competence: e.target.value, compTouched: true })} /></Field>
+        <Field label="Competência"><MonthInput value={f.competence} onChange={(v: string) => setF({ ...f, competence: v, compTouched: true })} /></Field>
         <Field label="Responsável">
           <select className="input" value={f.assigneeId} onChange={(e) => setF({ ...f, assigneeId: e.target.value })}>
             <option value="">Responsável do departamento (ou eu)</option>
@@ -543,7 +543,7 @@ export function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone
         <p className="text-sm">{res.created ? <><b>{res.created}</b> tarefa(s) criada(s) com vencimento em {competence(res.month)}.</> : <>Nada novo: as tarefas com vencimento em {competence(res.month)} já estavam geradas.</>}</p>
       ) : <>
         <p className="text-sm text-ink-muted">Todo dia <b>25</b> o sistema gera sozinho as tarefas que vencem no mês seguinte. Use este botão para antecipar (ou gerar um mês específico). Não duplica o que já existe.</p>
-        <Field label="Gerar as tarefas que vencem em"><input type="month" className="input" value={month} onChange={(e) => setMonth(e.target.value)} /></Field>
+        <Field label="Gerar as tarefas que vencem em"><MonthInput value={month} onChange={(v: string) => setMonth(v)} /></Field>
       </>}
     </Modal>
   );

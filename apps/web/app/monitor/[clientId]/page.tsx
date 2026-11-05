@@ -7,7 +7,7 @@ import { Bar as RBar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } fro
 import { apiPost, openSigned } from '../../../lib/api';
 import { useAction, useApi } from '../../../lib/hooks';
 import { brl, competence, date, doc, label, lastCompetence } from '../../../lib/format';
-import { Bar, Button, Card, Loading, PageHeader, Stat, StatusBadge, Table, Tabs } from '../../../components/ui';
+import { Bar, Button, Card, Loading, PageHeader, Stat, StatusBadge, Table, Tabs, MonthInput } from '../../../components/ui';
 
 /** Dashboard individual do cliente no Monitor: faturamento 12 meses, régua, guias, FGTS e declarações. */
 export default function ClientMonitor() {
@@ -26,7 +26,7 @@ export default function ClientMonitor() {
         title={client.legalName}
         subtitle={<>{doc(client.document)} · {label(client.regime)} · <Link className="link" href={`/clientes/${clientId}`}>Checkup 360</Link></>}
         actions={<>
-          <input type="month" className="input w-40" value={comp} onChange={(e) => setComp(e.target.value)} />
+          <MonthInput value={comp} onChange={(v: string) => setComp(v)} />
           <Button variant="secondary" disabled={busy} onClick={() => run(() => apiPost(`/monitor/sync/${clientId}`).then(() => setTimeout(reload, 2500)), 'Sincronizando comprovantes, caixa postal e declarações.')}><RefreshCw size={14} /> Sincronizar</Button>
         </>}
       />

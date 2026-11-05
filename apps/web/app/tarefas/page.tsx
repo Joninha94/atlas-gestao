@@ -7,9 +7,9 @@ import { Board } from './quadro';
 import { GenerateModal, NewTaskModal, TaskPanel } from './tarefa';
 import { Configurar } from './configurar';
 import { apiPost, apiPut, apiDelete, download, getSession, uploadFiles } from '../../lib/api';
-import { useAction, useApi } from '../../lib/hooks';
+import { useAction, useApi, useDebounced } from '../../lib/hooks';
 import { competence, date, dateTime, label, lastCompetence } from '../../lib/format';
-import { Badge, Button, Card, Empty, Field, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Table, Tabs } from '../../components/ui';
+import { Badge, Button, Card, Empty, Field, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Table, Tabs, MonthInput, SearchInput, DueDate } from '../../components/ui';
 
 type Tab = 'lista' | 'quadro' | 'calendario' | 'arraste' | 'modelos' | 'os' | 'configurar';
 
@@ -58,7 +58,9 @@ function List({ initialStatus, mine }: { initialStatus: string; mine: boolean })
   const openId: string | null = null;
   const me = getSession()?.user.id ?? '';
   const [f, setF] = useState({ status: initialStatus, competence: openId ? '' : lastCompetence(), departmentId: '', assigneeId: mine ? me : '' });
-  const q = new URLSearchParams(Object.fromEntries(Object.entries(f).filter(([, v]) => v))).toString();
+  const [search, setSearch] = useState('');
+  const busca = useDebounced(search.trim());
+  const q = new URLSearchParams(Object.fromEntries(Object.entries({ ...f, q: busca }).filter(([, v]) => v))).toString();
   const { data, reload } = useApi<any[]>(`/tasks/processes?${q}`);
   const { data: deps } = useApi<any[]>('/departments');
   const { data: users } = useApi<any[]>('/users');
@@ -72,7 +74,8 @@ function List({ initialStatus, mine }: { initialStatus: string; mine: boolean })
   return (
     <Card pad={false}>
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3">
-        <input type="month" className="input w-40" value={f.competence} onChange={(e) => setF({ ...f, competence: e.target.value })} aria-label="Competência" />
+        <SearchInput className="w-full sm:w-64" value={search} onChange={setSearch} placeholder="Pesquisar empresa (nome ou CNPJ)" />
+        <MonthInput value={f.competence} onChange={(v: string) => setF({ ...f, competence: v })} allowEmpty />
         <Select value={f.status} onChange={(v) => setF({ ...f, status: v })} placeholder="Todos os status" options={[
           { value: 'ABERTA', label: 'Abertas' }, { value: 'EM_MULTA', label: 'Abertas em multa' }, { value: 'IMPEDIMENTO', label: 'Impedimento' },
           { value: 'CONCLUIDO', label: 'Concluídas' }, { value: 'DISPENSADO', label: 'Desconsideradas' },
@@ -83,7 +86,7 @@ function List({ initialStatus, mine }: { initialStatus: string; mine: boolean })
           <Button variant="secondary" size="sm" disabled={!sel.size} onClick={() => setBulk({ assigneeIds: [], dueDate: '' })}>Editar {sel.size || ''} em lote</Button>
         </div>
       </div>
-      {!data ? <Loading /> : data.length === 0 ? <div className="p-6"><Empty title="Nenhuma tarefa neste filtro">As tarefas são geradas automaticamente pelos modelos conforme o prazo de cada obrigação.</Empty></div> : (
+      {!data ? <Loading /> : data.length === 0 ? <div className="p-6"><Empty title={busca ? `Nenhuma tarefa para "${busca}"` : 'Nenhuma tarefa neste filtro'}>As tarefas são geradas automaticamente pelos modelos conforme o prazo de cada obrigação.</Empty></div> : (
         <div className="divide-y divide-slate-100">
           {data.map((p) => {
             const done = p.tasks.filter((t: any) => t.done).length;
@@ -105,7 +108,7 @@ function List({ initialStatus, mine }: { initialStatus: string; mine: boolean })
                     {p.notifiedAt && <> · <span className="text-emerald-700">enviado ao cliente</span></>}
                   </div>
                 </button>
-                <div className={clsx('text-sm tabular-nums', open && new Date(p.dueDate) < new Date() && 'font-semibold text-red-600')}>{date(p.dueDate)}</div>
+                <DueDate value={p.dueDate} done={!open} />
                 <StatusBadge status={p.status} />
                 <Button variant="ghost" size="sm" onClick={() => setCurrent(p.id)}>Abrir</Button>
               </div>
@@ -135,7 +138,7 @@ function Calendar() {
   for (const p of data ?? []) { const d = new Date(p.dueDate).getUTCDate(); byDay.set(d, [...(byDay.get(d) ?? []), p]); }
   const today = new Date();
   return (
-    <Card title="Entregas do mês" actions={<input type="month" className="input w-40" value={month} onChange={(e) => setMonth(e.target.value)} />}>
+    <Card title="Entregas do mês" actions={<MonthInput value={month} onChange={(v: string) => setMonth(v)} />}>
       <div className="grid grid-cols-7 gap-px overflow-hidden rounded-md border border-slate-200 bg-slate-200 text-sm">
         {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((d) => <div key={d} className="bg-slate-50 px-2 py-1.5 text-center text-xs font-semibold text-ink-muted">{d}</div>)}
         {Array.from({ length: offset }).map((_, i) => <div key={`e${i}`} className="min-h-[110px] bg-white/60" />)}
@@ -369,7 +372,7 @@ function Templates() {
       <Modal open={!!apply} title={`Vincular cliente: ${apply?.t.name ?? ''}`} onClose={() => setApply(null)} footer={<Button disabled={!apply?.clientId} onClick={() => run(async () => { await apiPost(`/tasks/templates/${apply.t.id}/apply`, { clientId: apply.clientId, competence: apply.competence }); setApply(null); }, 'Processo criado.')}>Criar processo</Button>}>
         {apply && <>
           <Field label="Cliente"><Select className="w-full" value={apply.clientId} onChange={(v) => setApply({ ...apply, clientId: v })} placeholder="Selecione" options={(clients ?? []).map((c) => ({ value: c.id, label: c.legalName }))} /></Field>
-          <Field label="Competência"><input type="month" className="input" value={apply.competence} onChange={(e) => setApply({ ...apply, competence: e.target.value })} /></Field>
+          <Field label="Competência"><MonthInput value={apply.competence} onChange={(v: string) => setApply({ ...apply, competence: v })} allowEmpty /></Field>
         </>}
       </Modal>
     </Card>

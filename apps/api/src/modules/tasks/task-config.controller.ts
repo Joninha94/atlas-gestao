@@ -305,9 +305,9 @@ export class TaskConfigController {
 
   // ----------------------------------------------------------------- quadro (cartões)
   @Get('board')
-  async board(@CurrentUser() u: AuthUser, @Query('assigneeId') assigneeId?: string, @Query('departmentId') departmentId?: string, @Query('competence') competence?: string, @Query('clientGroupId') clientGroupId?: string) {
+  async board(@CurrentUser() u: AuthUser, @Query('assigneeId') assigneeId?: string, @Query('departmentId') departmentId?: string, @Query('competence') competence?: string, @Query('clientGroupId') clientGroupId?: string, @Query('q') q?: string) {
     await this.config.ensureDefaults(u.tenantId);
-    return this.tasks.board(u.tenantId, { assigneeId, departmentId, competence, clientGroupId });
+    return this.tasks.board(u.tenantId, { assigneeId, departmentId, competence, clientGroupId, q });
   }
 
   @Put('processes/:id/stage')

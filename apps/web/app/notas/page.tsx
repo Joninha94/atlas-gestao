@@ -5,7 +5,7 @@ import { Bar, BarChart, Cell, Legend, Pie, PieChart, ResponsiveContainer, Toolti
 import { apiGet, apiPost, download, openSigned } from '../../lib/api';
 import { useAction, useApi } from '../../lib/hooks';
 import { brl, competence, date, dateTime, doc, label, monthsAgo } from '../../lib/format';
-import { Badge, Button, Card, Empty, Field, Loading, Modal, PageHeader, Select, Stat, Table, Tabs } from '../../components/ui';
+import { Badge, Button, Card, Empty, Field, Loading, Modal, PageHeader, Select, Stat, Table, Tabs, MonthInput } from '../../components/ui';
 
 type Tab = 'visao' | 'documentos' | 'painel' | 'reforma' | 'exportacoes';
 const COLORS = ['#1d7871', '#43b2a6', '#f59e0b', '#6366f1', '#ef4444', '#94a3b8'];
@@ -78,7 +78,7 @@ function Documents({ clientId, clientSelect }: { clientId: string; clientSelect:
     <Card pad={false}>
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3">
         {clientSelect}
-        <input type="month" className="input w-40" value={f.competence} onChange={(e) => setF({ ...f, competence: e.target.value })} />
+        <MonthInput value={f.competence} onChange={(v: string) => setF({ ...f, competence: v })} allowEmpty />
         <Select value={f.kind} onChange={(v) => setF({ ...f, kind: v })} placeholder="Todos os tipos" options={['NFE', 'NFCE', 'CTE', 'NFSE'].map((v) => ({ value: v, label: label(v) }))} />
         <Select value={f.direction} onChange={(v) => setF({ ...f, direction: v })} placeholder="Entrada e saída" options={['ENTRADA', 'SAIDA', 'PRESTADO', 'TOMADO'].map((v) => ({ value: v, label: label(v) }))} />
         <input className="input w-32" placeholder="Etiqueta" value={f.tag} onChange={(e) => setF({ ...f, tag: e.target.value })} />
@@ -137,7 +137,7 @@ function Panel({ clientId, clientSelect }: { clientId: string; clientSelect: JSX
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">{clientSelect}<input type="month" className="input w-40" value={period.from} onChange={(e) => setPeriod({ ...period, from: e.target.value })} /> até <input type="month" className="input w-40" value={period.to} onChange={(e) => setPeriod({ ...period, to: e.target.value })} /></div>
+      <div className="flex flex-wrap items-center gap-2">{clientSelect}<MonthInput value={period.from} onChange={(v: string) => setPeriod({ ...period, from: v })} /> até <MonthInput value={period.to} onChange={(v: string) => setPeriod({ ...period, to: v })} /></div>
       {!data ? <Loading /> : data.volume === 0 ? <Empty title="Sem notas no período">Capture as notas na aba Notas ou aguarde a próxima captura automática.</Empty> : <>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
           <Stat label="Receita bruta" value={brl(data.resumo.revenue)} />

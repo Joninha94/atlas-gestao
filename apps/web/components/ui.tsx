@@ -1,9 +1,9 @@
 'use client';
 import clsx from 'clsx';
-import { X } from 'lucide-react';
-import { ButtonHTMLAttributes, ReactNode, useEffect, useState } from 'react';
+import { CalendarDays, ChevronLeft, ChevronRight, Search, X } from 'lucide-react';
+import { ButtonHTMLAttributes, ReactNode, useEffect, useRef, useState } from 'react';
 import { onToast } from '../lib/hooks';
-import { label } from '../lib/format';
+import { MESES, label, monthLabel, relativeDue, date as fmtDate } from '../lib/format';
 
 export function Button({ variant = 'primary', size = 'md', className, ...p }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'ghost' | 'danger'; size?: 'sm' | 'md' }) {
   return (
@@ -200,6 +200,92 @@ export function Bar({ value, max, tone = 'brand' }: { value: number; max: number
   return (
     <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
       <div className={clsx('h-full rounded-full', tone === 'brand' && 'bg-brand-500', tone === 'amber' && 'bg-amber-500', tone === 'red' && 'bg-red-500')} style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+const MES_CURTO = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+const addMonth = (c: string, n: number) => {
+  const [y, m] = c.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + n, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+};
+
+/**
+ * Seletor de mês/competência padrão do sistema: "‹ Outubro de 2026 ›" com calendário de meses.
+ * `allowEmpty` mostra a opção "Todas" (valor vazio).
+ */
+export function MonthInput({ value, onChange, allowEmpty, emptyLabel = 'Todas as competências', className, ariaLabel = 'Competência' }: {
+  value: string; onChange: (v: string) => void; allowEmpty?: boolean; emptyLabel?: string; className?: string; ariaLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const now = new Date();
+  const cur = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const [year, setYear] = useState(Number((value || cur).slice(0, 4)));
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    setYear(Number((value || cur).slice(0, 4)));
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', esc); };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const text = value ? monthLabel(value).replace(/^./, (c) => c.toUpperCase()) : emptyLabel;
+  return (
+    <div ref={ref} className={clsx('relative inline-flex w-auto', className)}>
+      <div className="flex h-9 w-full items-stretch overflow-hidden rounded-lg border border-slate-300 bg-white text-sm shadow-sm shadow-slate-900/[0.03] transition hover:border-slate-400 focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500/20">
+        <button type="button" aria-label="Mês anterior" disabled={!value} onClick={() => onChange(addMonth(value, -1))} className="px-2 text-ink-muted hover:bg-slate-50 hover:text-ink disabled:opacity-30"><ChevronLeft size={15} /></button>
+        <button type="button" aria-label={`${ariaLabel}: ${text}`} aria-expanded={open} onClick={() => setOpen((o) => !o)} className="flex min-w-[9.5rem] flex-1 items-center justify-center gap-1.5 border-x border-slate-200 px-2 font-medium outline-none hover:bg-slate-50">
+          <CalendarDays size={14} className="text-brand-600" /><span className="whitespace-nowrap">{text}</span>
+        </button>
+        <button type="button" aria-label="Próximo mês" disabled={!value} onClick={() => onChange(addMonth(value, 1))} className="px-2 text-ink-muted hover:bg-slate-50 hover:text-ink disabled:opacity-30"><ChevronRight size={15} /></button>
+      </div>
+      {open && (
+        <div className="absolute left-0 top-10 z-30 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-lg" role="dialog" aria-label="Escolher mês">
+          <div className="mb-2 flex items-center justify-between">
+            <button type="button" aria-label="Ano anterior" onClick={() => setYear(year - 1)} className="rounded p-1 hover:bg-slate-100"><ChevronLeft size={16} /></button>
+            <span className="text-sm font-semibold tabular-nums">{year}</span>
+            <button type="button" aria-label="Próximo ano" onClick={() => setYear(year + 1)} className="rounded p-1 hover:bg-slate-100"><ChevronRight size={16} /></button>
+          </div>
+          <div className="grid grid-cols-3 gap-1">
+            {MES_CURTO.map((m, i) => {
+              const v = `${year}-${String(i + 1).padStart(2, '0')}`;
+              return (
+                <button type="button" key={m} title={MESES[i]} onClick={() => { onChange(v); setOpen(false); }}
+                  className={clsx('rounded-md py-1.5 text-sm', v === value ? 'bg-brand-600 font-semibold text-white' : v === cur ? 'font-semibold text-brand-700 ring-1 ring-inset ring-brand-200 hover:bg-brand-50' : 'hover:bg-slate-100')}>{m}</button>
+              );
+            })}
+          </div>
+          <div className="mt-2 flex justify-between border-t border-slate-100 pt-2 text-xs">
+            <button type="button" className="text-brand-700 hover:underline" onClick={() => { onChange(cur); setOpen(false); }}>Este mês</button>
+            {allowEmpty && <button type="button" className="text-ink-muted hover:underline" onClick={() => { onChange(''); setOpen(false); }}>{emptyLabel}</button>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Campo de busca padrão (com lupa e botão de limpar). */
+export function SearchInput({ value, onChange, placeholder = 'Buscar…', className, autoFocus }: { value: string; onChange: (v: string) => void; placeholder?: string; className?: string; autoFocus?: boolean }) {
+  return (
+    <div className={clsx('relative', className)}>
+      <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-muted" />
+      <input className="input pl-8 pr-8" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} aria-label={placeholder} autoFocus={autoFocus} type="search" />
+      {value && <button type="button" aria-label="Limpar busca" onClick={() => onChange('')} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-ink-muted hover:bg-slate-100"><X size={14} /></button>}
+    </div>
+  );
+}
+
+/** Vencimento legível: "05 nov 2026" + "vence hoje" / "em 5 dias" / "venceu há 3 dias". */
+export function DueDate({ value, done }: { value?: string | Date | null; done?: boolean }) {
+  const rel = done ? null : relativeDue(value);
+  return (
+    <div className="text-right leading-tight">
+      <div className={clsx('whitespace-nowrap text-sm tabular-nums', rel?.tone === 'red' ? 'font-semibold text-red-600' : 'text-ink')}>{fmtDate(value)}</div>
+      {rel && <div className={clsx('whitespace-nowrap text-[11px]', rel.tone === 'red' ? 'text-red-600' : rel.tone === 'amber' ? 'text-amber-700' : 'text-ink-muted')}>{rel.text}</div>}
     </div>
   );
 }

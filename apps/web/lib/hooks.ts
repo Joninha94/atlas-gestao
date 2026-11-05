@@ -65,3 +65,13 @@ export function onToast(fn: (t: { id: number; text: string; kind: ToastKind }) =
     listeners.delete(fn);
   };
 }
+
+/** Valor com atraso (para busca enquanto digita, sem uma chamada por tecla). */
+export function useDebounced<T>(value: T, ms = 350) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
