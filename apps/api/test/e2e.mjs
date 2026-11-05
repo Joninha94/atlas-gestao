@@ -129,7 +129,8 @@ await step('departamentos e usuário colaborador', async () => {
   assert.ok(ctx.dep.Fiscal && ctx.dep.Pessoal);
   const me = await get('/auth/me');
   ctx.adminId = me.sub;
-  const u = await post('/users', { name: 'Ana Fiscal', email: `ana.${Date.now()}@produtiva.local`, role: 'COLABORADOR', password: 'SenhaForte123!', departments: [{ departmentId: ctx.dep.Fiscal }] });
+  ctx.colabEmail = `ana.${Date.now()}@produtiva.local`;
+  const u = await post('/users', { name: 'Ana Fiscal', email: ctx.colabEmail, role: 'COLABORADOR', password: 'SenhaForte123!', departments: [{ departmentId: ctx.dep.Fiscal }] });
   ctx.colabId = u.id;
 });
 
@@ -606,6 +607,114 @@ await step('agente local: token, exportar agora, entrega na pasta de importaçã
   const r3 = run();
   assert.notEqual(r3.status, 0);
   assert.match(r3.stderr + r3.stdout, /401|revogado/);
+});
+
+// ---------------------------------------------------------------- Tarefas → Configurar
+await step('Configurar tarefas: POP trava a conclusão; ao concluir avisa o cliente por e-mail, WhatsApp e app', async () => {
+  const sum = await get('/tasks/config/summary');
+  assert.ok(sum.stages >= 5 && sum.pops >= 5 && sum.flows >= 1, 'padrões criados (colunas, POPs, fluxos)');
+  const pop = await post('/tasks/config/pops', { title: `POP teste ${Date.now()}`, items: [{ text: 'Conferir notas' }, { text: 'Transmitir declaração' }] });
+  assert.equal(pop.items.length, 2);
+  const tpl = await post('/tasks/templates', { name: `Tarefa com POP ${Date.now()}`, recurrence: 'NENHUMA', dueDay: 1, steps: [{ order: 1, title: 'Executar', attachment: 'OPCIONAL' }] });
+  await put(`/tasks/config/template-settings/${tpl.id}`, { popId: pop.id, notifyClient: true });
+  const proc = await post(`/tasks/templates/${tpl.id}/apply`, { clientId: ctx.clientId, competence: comp });
+  const full = await get(`/tasks/processes/${proc.id}`);
+  assert.equal(full.popItems.length, 2, 'POP copiado para o processo');
+  const task = full.tasks[0];
+  await assert.rejects(post(`/tasks/tasks/${task.id}/complete`, {}), /POP/);
+  await put(`/tasks/processes/${proc.id}/pop/${pop.items[0].id}`, { checked: true });
+  await put(`/tasks/processes/${proc.id}/pop/${pop.items[1].id}`, { checked: true });
+  await put(`/tasks/processes/${proc.id}/pop/${pop.items[1].id}`, { checked: false }); // desmarca
+  await assert.rejects(post(`/tasks/tasks/${task.id}/complete`, {}), /1\/2/);
+  const chk = await put(`/tasks/processes/${proc.id}/pop/${pop.items[1].id}`, { checked: true });
+  assert.ok(chk.progress.complete);
+  const r = await post(`/tasks/tasks/${task.id}/complete`, {});
+  assert.equal(r.concluded, true);
+  assert.ok(r.aviso.sent.EMAIL >= 1 && r.aviso.sent.WHATSAPP >= 1 && r.aviso.sent.APP >= 1, JSON.stringify(r.aviso));
+  const out = await get('/dev/outbox');
+  assert.ok(out.some((o) => o.channel === 'EMAIL' && o.to === 'maria@cliente.com' && o.subject?.includes(tpl.name)), 'e-mail de conclusão');
+  assert.ok(out.some((o) => o.channel === 'WHATSAPP' && o.to === PHONE && o.body?.includes(tpl.name)), 'WhatsApp de conclusão');
+  assert.ok(out.some((o) => o.channel === 'PUSH' && o.subject?.includes(tpl.name)), 'push no celular');
+  await assert.rejects(put(`/tasks/processes/${proc.id}/pop/${pop.items[0].id}`, { checked: false }), /encerrado/);
+  // App do cliente: aviso na caixa de notificações
+  const n = await get('/app/notifications', ctx.app);
+  const aviso = n.items.find((i) => i.title.includes(tpl.name));
+  assert.ok(aviso && !aviso.readAt && n.unread >= 1, 'aviso no app');
+  await post('/app/notifications/read', { ids: [aviso.id] }, ctx.app);
+  assert.ok((await get('/app/notifications', ctx.app)).items.find((i) => i.id === aviso.id).readAt);
+  // Quadro: cartão na coluna de concluídos
+  const board = await get('/tasks/board');
+  const card = board.cards.find((c) => c.id === proc.id);
+  assert.equal(board.stages.find((s) => s.id === card.stageId).status, 'CONCLUIDO');
+  assert.deepEqual(card.pop, { done: 2, total: 2 });
+});
+
+await step('Configurar tarefas: fluxo encadeado, quadro, agrupadores e documento no papel timbrado', async () => {
+  const a = await post('/tasks/templates', { name: `Fluxo A ${Date.now()}`, recurrence: 'NENHUMA', dueDay: 1, steps: [{ order: 1, title: 'Passo A', attachment: 'OPCIONAL' }] });
+  const b = await post('/tasks/templates', { name: `Fluxo B ${Date.now()}`, recurrence: 'NENHUMA', dueDay: 1, steps: [{ order: 1, title: 'Passo B', attachment: 'OPCIONAL' }] });
+  await put(`/tasks/config/template-settings/${a.id}`, { notifyClient: false });
+  const flow = await post('/tasks/config/flows', { name: `Fluxo teste ${Date.now()}`, steps: [{ templateId: a.id, delayDays: 0 }, { templateId: b.id, delayDays: 2 }] });
+  const p1 = await post(`/tasks/config/flows/${flow.id}/start`, { clientId: ctx.clientId, competence: comp });
+  assert.equal(p1.flowStep, 0);
+  // arrasta para "Em andamento", depois tenta "Concluído" sem terminar as etapas
+  const { stages } = await get('/tasks/board');
+  const doing = stages.find((s) => s.name === 'Em andamento');
+  const done = stages.find((s) => s.status === 'CONCLUIDO');
+  assert.equal((await put(`/tasks/processes/${p1.id}/stage`, { stageId: doing.id })).status, 'EM_PROGRESSO');
+  await assert.rejects(put(`/tasks/processes/${p1.id}/stage`, { stageId: done.id }), /Conclua as etapas/);
+  const full = await get(`/tasks/processes/${p1.id}`);
+  const r = await post(`/tasks/tasks/${full.tasks[0].id}/complete`, {});
+  assert.ok(r.nextProcessId, 'próximo passo do fluxo criado');
+  assert.equal(r.aviso, null, 'aviso desligado neste modelo');
+  const p2 = await get(`/tasks/processes/${r.nextProcessId}`);
+  assert.equal(p2.flowId, flow.id);
+  assert.equal(p2.flowStep, 1);
+  assert.ok((await get('/tasks/config/flows/processes')).some((p) => p.id === p2.id));
+
+  // Agrupador de tarefas: modelo marcado só vale para clientes com o agrupador
+  const g = await post('/tasks/config/task-groups', { name: `Grupo ${Date.now()}` });
+  const das = (await get('/tasks/templates')).find((t) => t.name === 'PGDAS-D e DAS');
+  const orig = (await get('/tasks/config/template-settings')).find((t) => t.id === das.id);
+  await put(`/tasks/config/template-settings/${das.id}`, { popId: orig.popId, groupId: g.id, notifyClient: orig.notifyClient });
+  let ob = (await get(`/tasks/clients/${ctx.clientId}/obligations`)).find((o) => o.templateId === das.id);
+  assert.equal(ob.byDefault, false);
+  assert.match(ob.reason, /Agrupador/);
+  await put('/tasks/config/clients/groups', { clientIds: [ctx.clientId], kind: 'task', add: [g.id] });
+  ob = (await get(`/tasks/clients/${ctx.clientId}/obligations`)).find((o) => o.templateId === das.id);
+  assert.equal(ob.byDefault, true);
+  await put(`/tasks/config/template-settings/${das.id}`, { popId: orig.popId, groupId: null, notifyClient: orig.notifyClient });
+  await call('DELETE', `/tasks/config/task-groups/${g.id}`);
+
+  // Documento no papel timbrado com variáveis do cliente
+  const docs = await get('/tasks/config/documents');
+  assert.ok(docs.length >= 1);
+  const pdf = await call('GET', `/tasks/config/documents/${docs[0].id}/pdf?clientId=${ctx.clientId}`, undefined, token, true);
+  assert.equal(pdf.status, 200);
+  assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+});
+
+await step('Configurar tarefas: mensagens editáveis, horário de acesso, usuários do app e domínio de e-mail', async () => {
+  const msgs = await get('/tasks/config/messages');
+  assert.equal(msgs.length, 3);
+  await put('/tasks/config/messages', { event: 'TAREFA_CONCLUIDA', channel: 'WHATSAPP', body: 'Oi {{contato}}, {{tarefa}} pronta!', active: true });
+  assert.ok((await get('/tasks/config/messages')).find((m) => m.channel === 'WHATSAPP').custom);
+  await call('DELETE', '/tasks/config/messages/TAREFA_CONCLUIDA/WHATSAPP');
+  assert.ok(!(await get('/tasks/config/messages')).find((m) => m.channel === 'WHATSAPP').custom);
+  // Horário de acesso: colaborador fora da janela não entra; admin não pode ser restringido
+  const now = new Date(Date.now() - 3 * 3600_000); // Maceió
+  const other = (now.getUTCDay() + 3) % 7;
+  await put(`/tasks/config/users/${ctx.colabId}/access-hours`, { hours: [{ weekday: other, start: '08:00', end: '09:00' }] });
+  await assert.rejects(post('/auth/login', { cnpj: OFFICE, email: ctx.colabEmail, password: 'SenhaForte123!' }, ''), /horário/);
+  await put(`/tasks/config/users/${ctx.colabId}/access-hours`, { hours: [] });
+  assert.ok((await post('/auth/login', { cnpj: OFFICE, email: ctx.colabEmail, password: 'SenhaForte123!' }, '')).accessToken);
+  await assert.rejects(put(`/tasks/config/users/${ctx.adminId}/access-hours`, { hours: [{ weekday: 1, start: '08:00', end: '18:00' }] }), /403/);
+  assert.ok((await get('/tasks/config/app-users')).some((c) => c.email === 'maria@cliente.com' && c.appLogin));
+  const em = await put('/tasks/config/email', { emailFromName: 'Produtiva Contabilidade', emailFrom: 'contato@produtivacontabilidade.com.br', emailReplyTo: '' });
+  assert.equal(em.domain, 'produtivacontabilidade.com.br');
+  const audit = await get('/tasks/config/email/audit?domain=produtivacontabilidade.com.br');
+  assert.equal(audit.checks.length, 4);
+  await put('/tasks/config/email', { emailFromName: '', emailFrom: '', emailReplyTo: '' });
+  await assert.rejects(put('/tasks/config/email', { emailFrom: 'sem-arroba' }), /inválido/);
 });
 
 await step('job que falha de vez vira alerta no painel e pode ser reprocessado', async () => {

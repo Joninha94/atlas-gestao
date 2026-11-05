@@ -11,3 +11,4 @@ apps/mobile/dist/
 .storage/
 .env.local-docker
 .demo-carregada
+dump.rdb

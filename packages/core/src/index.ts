@@ -8,3 +8,4 @@ export * from './reforma';
 export * from './drive';
 export * from './xml';
 export * from './cnpjws';
+export * from './tarefas';

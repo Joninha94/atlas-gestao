@@ -22,7 +22,8 @@ BEGIN
     'FiscalGuide','Declaration','Installment','FiscalSituation','Certidao','PaymentReceipt',
     'MailboxMessage','WhatsappNumber','Conversation','Broadcast','InternalChannel',
     'FiscalDocument','ExportJob','Process','ServiceOrder','Folder',
-    'RefreshToken','LoginCode','Notification','AgentDevice','JobFailure','ClientObligation'
+    'RefreshToken','LoginCode','Notification','AgentDevice','JobFailure','ClientObligation',
+    'TemplateSetting','TaskGroup','ClientGroup','BoardStage','TaskFlow','DocumentTemplate','ClientNotification'
   ]
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
@@ -35,7 +36,7 @@ BEGIN
   END LOOP;
 
   -- Modelos e formulários globais (tenantId nulo) são visíveis a todos, editáveis só pelo próprio escritório.
-  FOREACH t IN ARRAY ARRAY['ProcessTemplate','ServiceForm']
+  FOREACH t IN ARRAY ARRAY['ProcessTemplate','ServiceForm','Pop','MessageTemplate']
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);

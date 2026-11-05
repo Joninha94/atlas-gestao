@@ -2,6 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from './generated/client';
 
 export * from './generated/client';
+export * as padroesTarefas from './padroes-tarefas';
 
 /**
  * Cria um PrismaClient (Prisma 7, driver adapter `pg`, sem binário Rust).

@@ -7,6 +7,8 @@ import { AuthUser, CurrentUser, PERMISSIONS, RequirePermission } from '../../com
 import { PrismaService } from '../../common/prisma.service';
 import { AiGatewayService } from '../../integrations/ai/ai-gateway.service';
 import { describeDeadline, TasksService } from './tasks.service';
+import { TaskConfigController } from './task-config.controller';
+import { TaskConfigService } from './task-config.service';
 
 const StepSchema = z.object({
   order: z.number().int(),
@@ -261,8 +263,8 @@ export class TasksController {
 }
 
 @Module({
-  controllers: [TasksController],
-  providers: [TasksService],
-  exports: [TasksService],
+  controllers: [TasksController, TaskConfigController],
+  providers: [TasksService, TaskConfigService],
+  exports: [TasksService, TaskConfigService],
 })
 export class TasksModule {}

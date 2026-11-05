@@ -4,11 +4,13 @@ import { Badge, Button, C, Card, Empty, ErrorBox, Loading, Row, Screen, Stat, s 
 import { getSession } from '../../lib/api';
 import { brl, comp, date, label } from '../../lib/format';
 import { useApi } from '../../lib/hooks';
+import { useAvisos } from '../../lib/avisos';
 
 export default function Home() {
   const { data, error, loading, reload } = useApi<any>('/app/home');
   const router = useRouter();
   const user = getSession()?.user;
+  const avisos = useAvisos();
   if (error) return <Screen><ErrorBox error={error} onRetry={reload} /></Screen>;
   if (!data) return <Loading />;
 
@@ -24,6 +26,14 @@ export default function Home() {
         <Text style={s.h1}>{data.empresa.nome}</Text>
         <Text style={s.muted}>{label(data.empresa.regime)}</Text>
       </View>
+
+      {avisos.unread > 0 && (
+        <Card title="Novos avisos" right={<Badge tone="green">{avisos.unread}</Badge>}>
+          {avisos.items.filter((a) => !a.readAt).slice(0, 3).map((a) => (
+            <Row key={a.id} icon="checkmark-done-circle-outline" title={a.title} subtitle={a.body} onPress={() => router.push('/avisos')} />
+          ))}
+        </Card>
+      )}
 
       {data.guiasPendentes.length > 0 && (
         <Card title="Guias a pagar" right={<Badge tone="amber">{data.guiasPendentes.length}</Badge>}>

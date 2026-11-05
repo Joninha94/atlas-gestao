@@ -1,9 +1,9 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import argon2 from 'argon2';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { authenticator } from 'otplib';
-import { onlyDigits } from '@produtiva/core';
+import { type AccessWindow, onlyDigits, withinAccessHours } from '@produtiva/core';
 import { AuthUser, ROLE_PERMISSIONS } from '../../common/auth';
 import { SystemPrismaService } from '../../common/prisma.service';
 import { VaultService } from '../../common/vault.service';
@@ -37,6 +37,7 @@ export class AuthService {
     const ok = user ? await argon2.verify(user.passwordHash, password) : (await argon2.verify(await dummyHash(), password), false);
     if (!tenant || !user || !user.active || !ok) throw new UnauthorizedException('E-mail ou senha inválidos.');
 
+    this.assertAccessHours(user);
     if (user.totpEnabled) {
       if (!totp) return { requiresTotp: true as const };
       const secret = this.vault.openString(user.totpSecretEnc!);
@@ -47,6 +48,14 @@ export class AuthService {
       permissions: ROLE_PERMISSIONS[user.role], plan: tenant.plan,
     };
     return this.issue(payload, 'USER', { id: user.id, name: user.name, role: user.role, totpEnabled: user.totpEnabled, tenant: tenant.name });
+  }
+
+  /** Horário de acesso ao sistema (Tarefas → Configurar → Horários). Administradores nunca ficam bloqueados. */
+  private assertAccessHours(user: { role: string; accessHours: unknown }) {
+    if (user.role === 'ADMIN') return;
+    if (!withinAccessHours(user.accessHours as AccessWindow[] | null)) {
+      throw new ForbiddenException('Fora do seu horário de acesso ao sistema. Fale com o administrador do escritório.');
+    }
   }
 
   async totpSetup(userId: string) {
@@ -130,6 +139,7 @@ export class AuthService {
     if (row.kind === 'USER') {
       const user = await this.sys.user.findUniqueOrThrow({ where: { id: row.subject } });
       if (!user.active) throw new UnauthorizedException();
+      this.assertAccessHours(user);
       return this.issue(
         { sub: user.id, tenantId: tenant.id, role: user.role, name: user.name, permissions: ROLE_PERMISSIONS[user.role], plan: tenant.plan },
         'USER',

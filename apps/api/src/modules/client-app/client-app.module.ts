@@ -145,6 +145,28 @@ export class ClientAppController {
     return this.prisma.pushToken.upsert({ where: { token: b.token }, create: { contactId: u.sub, token: b.token, platform: b.platform }, update: { contactId: u.sub } });
   }
 
+  /** Avisos do escritório (tarefa concluída, documentos…) — o app mostra como notificação, igual ao WhatsApp. */
+  @ClientRoute()
+  @Get('notifications')
+  async notifications(@CurrentUser() u: AuthUser, @Query('after') after?: string) {
+    const where = { clientId: u.clientId!, OR: [{ contactId: null }, { contactId: u.sub }], ...(after ? { createdAt: { gt: new Date(after) } } : {}) };
+    const [items, unread] = await Promise.all([
+      this.prisma.clientNotification.findMany({ where, orderBy: { createdAt: 'desc' }, take: 100 }),
+      this.prisma.clientNotification.count({ where: { clientId: u.clientId!, OR: [{ contactId: null }, { contactId: u.sub }], readAt: null } }),
+    ]);
+    return { items, unread };
+  }
+
+  @ClientRoute()
+  @Post('notifications/read')
+  async readNotifications(@CurrentUser() u: AuthUser, @Body() b: { ids?: string[] }) {
+    const r = await this.prisma.clientNotification.updateMany({
+      where: { clientId: u.clientId!, readAt: null, ...(b?.ids?.length ? { id: { in: b.ids } } : {}) },
+      data: { readAt: new Date() },
+    });
+    return { read: r.count };
+  }
+
   @ClientRoute()
   @Get('guides')
   async guides(@CurrentUser() u: AuthUser, @Query('status') status?: 'PAGAS' | 'PENDENTES') {

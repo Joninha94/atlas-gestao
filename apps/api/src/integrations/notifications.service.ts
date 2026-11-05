@@ -38,7 +38,7 @@ export class NotificationsService {
   }
 
   /** Push para o app do cliente via Expo Push API. */
-  async pushToContact(contactId: string, title: string, body: string) {
+  async pushToContact(contactId: string, title: string, body: string, data?: Record<string, unknown>) {
     const tokens = await this.sys.pushToken.findMany({ where: { contactId } });
     if (isSandbox()) {
       await pushOutbox({ channel: 'PUSH', to: contactId, subject: title, body });
@@ -49,7 +49,7 @@ export class NotificationsService {
       await request('https://exp.host/--/api/v2/push/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(tokens.map((t) => ({ to: t.token, title, body, sound: 'default' }))),
+        body: JSON.stringify(tokens.map((t) => ({ to: t.token, title, body, data, sound: 'default', priority: 'high', channelId: 'avisos' }))),
       });
     } catch (e) {
       this.log.warn(`Push falhou: ${(e as Error).message}`);

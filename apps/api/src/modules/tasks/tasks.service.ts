@@ -8,6 +8,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { ClientCreatedEvent, Events, GuideDispatchedEvent, ServiceFormSubmittedEvent } from '../../common/events';
 import { AiGatewayService } from '../../integrations/ai/ai-gateway.service';
 import { DispatchService } from '../../integrations/dispatch.service';
+import { TaskConfigService } from './task-config.service';
 
 @Injectable()
 export class TasksService {
@@ -17,7 +18,14 @@ export class TasksService {
     private readonly prisma: PrismaService,
     private readonly ai: AiGatewayService,
     private readonly dispatch: DispatchService,
+    private readonly config: TaskConfigService,
   ) {}
+
+  /** Junta aos modelos os ajustes do escritório (agrupador de tarefas, POP, aviso ao cliente). */
+  private async withSettings<T extends { id: string }>(tenantId: string, templates: T[]) {
+    const map = await this.config.settingsMap(tenantId);
+    return templates.map((t) => ({ ...t, groupId: map.get(t.id)?.groupId ?? null }));
+  }
 
   // ---------------------------------------------------------------------------
   // Geração de processos a partir dos modelos (job diário 00:05)
@@ -30,10 +38,10 @@ export class TasksService {
 
   async generateForDate(tenantId: string, today = new Date(), holidays?: Set<string>) {
     holidays ??= await this.holidays();
-    const templates = await this.prisma.processTemplate.findMany({
+    const templates = await this.withSettings(tenantId, await this.prisma.processTemplate.findMany({
       where: { OR: [{ tenantId }, { tenantId: null }], recurrence: { not: 'NENHUMA' } },
       include: { steps: { orderBy: { order: 'asc' } } },
-    });
+    }));
     let created = 0;
     let clients: any[] | undefined;
     for (const t of templates) {
@@ -50,7 +58,7 @@ export class TasksService {
     return { created };
   }
 
-  async createProcess(tenantId: string, t: any, client: any, competence: string, holidays = new Set<string>()) {
+  async createProcess(tenantId: string, t: any, client: any, competence: string, holidays = new Set<string>(), opts: { flowId?: string; flowStep?: number; dueDate?: Date } = {}) {
     // Parcelamentos: só gera para quem tem parcelamento cadastrado
     if (t.monitorLink === 'PARCELAMENTOS' && !(await this.prisma.installment.count({ where: { clientId: client.id } }))) return null;
     const due = dueDateForTemplate(
@@ -58,6 +66,8 @@ export class TasksService {
       competence, holidays,
     );
     const responsible = client.responsibles?.find((r: any) => r.departmentId === t.departmentId);
+    const defaults = await this.config.processDefaults(tenantId, t.id);
+    const finalDue = opts.dueDate && opts.dueDate > due ? opts.dueDate : opts.dueDate && t.recurrence === 'NENHUMA' ? opts.dueDate : due;
     try {
       return await this.prisma.process.create({
         data: {
@@ -66,14 +76,17 @@ export class TasksService {
           clientId: client.id,
           title: t.name,
           competence,
-          dueDate: due,
+          dueDate: finalDue,
+          ...defaults,
+          flowId: opts.flowId ?? null,
+          flowStep: opts.flowStep ?? null,
           assigneeIds: responsible ? [responsible.userId] : [],
           departmentIds: t.departmentId ? [t.departmentId] : [],
           tasks: {
             create: t.steps.map((s: any, i: number) => ({
               order: s.order,
               title: s.title,
-              dueDate: new Date(due.getTime() + s.dueOffsetDays * 86_400_000),
+              dueDate: new Date(finalDue.getTime() + s.dueOffsetDays * 86_400_000),
               priority: s.priority,
               attachment: s.attachment,
               blocked: t.cascade && i > 0,
@@ -93,7 +106,7 @@ export class TasksService {
   async clientObligations(tenantId: string, clientId: string) {
     const client = await this.prisma.clientCompany.findFirstOrThrow({ where: { id: clientId, tenantId }, include: { obligationRules: true } });
     const [templates, departments, open] = await Promise.all([
-      this.prisma.processTemplate.findMany({ where: { OR: [{ tenantId }, { tenantId: null }], recurrence: { not: 'NENHUMA' } }, orderBy: [{ category: 'asc' }, { name: 'asc' }] }),
+      this.prisma.processTemplate.findMany({ where: { OR: [{ tenantId }, { tenantId: null }], recurrence: { not: 'NENHUMA' } }, orderBy: [{ category: 'asc' }, { name: 'asc' }] }).then((r) => this.withSettings(tenantId, r)),
       this.prisma.department.findMany({ select: { id: true, name: true } }),
       this.prisma.process.groupBy({ by: ['templateId'], where: { clientId, status: { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA'] } }, _count: true }),
     ]);
@@ -104,7 +117,7 @@ export class TasksService {
       .map((t) => {
         const rule = client.obligationRules.find((r) => r.templateId === t.id);
         const byDefault = templateApplies(t, { ...client, obligationRules: [] });
-        const reason = rule ? 'Ajuste manual' : t.optIn ? 'Opcional: ative se a empresa tiver' : t.regimes.length && !t.regimes.includes(client.regime) ? 'Não se aplica ao regime'
+        const reason = rule ? 'Ajuste manual' : t.groupId && !client.taskGroupIds.includes(t.groupId) ? 'Agrupador de tarefas não marcado no cliente' : t.optIn ? 'Opcional: ative se a empresa tiver' : t.regimes.length && !t.regimes.includes(client.regime) ? 'Não se aplica ao regime'
           : t.ufs.length && !(client.uf && t.ufs.includes(client.uf)) ? `Só para ${t.ufs.join(', ')}` : 'Padrão do regime';
         return {
           templateId: t.id, name: t.name, category: t.category, department: departments.find((d) => d.id === t.departmentId)?.name ?? null,
@@ -118,7 +131,7 @@ export class TasksService {
   /** enabled = null volta ao padrão do modelo. Ao ativar uma obrigação mensal, já cria o processo da competência atual. */
   async setClientObligation(tenantId: string, userId: string, clientId: string, templateId: string, enabled: boolean | null) {
     const client = await this.prisma.clientCompany.findFirstOrThrow({ where: { id: clientId, tenantId }, include: { responsibles: true } });
-    const t = await this.prisma.processTemplate.findFirstOrThrow({ where: { id: templateId, OR: [{ tenantId }, { tenantId: null }] }, include: { steps: { orderBy: { order: 'asc' } } } });
+    const [t] = await this.withSettings(tenantId, [await this.prisma.processTemplate.findFirstOrThrow({ where: { id: templateId, OR: [{ tenantId }, { tenantId: null }] }, include: { steps: { orderBy: { order: 'asc' } } } })]);
     if (enabled === null) await this.prisma.clientObligation.deleteMany({ where: { clientId, templateId } });
     else await this.prisma.clientObligation.upsert({ where: { clientId_templateId: { clientId, templateId } }, create: { tenantId, clientId, templateId, enabled }, update: { enabled } });
     await this.prisma.auditLog.create({ data: { tenantId, userId, clientId, action: 'obrigacao.ajuste', entity: 'ProcessTemplate', entityId: templateId, meta: { enabled } } });
@@ -133,10 +146,12 @@ export class TasksService {
   @OnEvent(Events.CLIENT_CREATED)
   async onClientCreated(e: ClientCreatedEvent) {
     const client = await this.prisma.clientCompany.findUniqueOrThrow({ where: { id: e.clientId }, include: { responsibles: true, obligationRules: true } });
-    const templates = (await this.prisma.processTemplate.findMany({
+    const gen = ((await this.prisma.tenant.findUnique({ where: { id: e.tenantId }, select: { taskSettings: true } }))?.taskSettings as any) ?? {};
+    if (gen.onClientCreate === false) return 0;
+    const templates = (await this.withSettings(e.tenantId, await this.prisma.processTemplate.findMany({
       where: { OR: [{ tenantId: e.tenantId }, { tenantId: null }], recurrence: 'MENSAL' },
       include: { steps: { orderBy: { order: 'asc' } } },
-    })).filter((t) => templateApplies(t, client));
+    }))).filter((t) => templateApplies(t, client));
     const competence = competenceForRun(new Date());
     const holidays = await this.holidays();
     let created = 0;
@@ -154,7 +169,10 @@ export class TasksService {
     });
     for (const p of processes) {
       await this.prisma.processTask.updateMany({ where: { processId: p.id }, data: { done: true, doneAt: new Date(), doneById: 'monitor', blocked: false } });
-      await this.prisma.process.update({ where: { id: p.id }, data: { status: 'CONCLUIDO', completedAt: new Date() } });
+      // A guia já foi ao cliente pelo Monitor: não repete o aviso. O POP não bloqueia a baixa automática.
+      const done = await this.doneStage(e.tenantId);
+      await this.prisma.process.update({ where: { id: p.id }, data: { status: 'CONCLUIDO', completedAt: new Date(), notifiedAt: new Date(), ...(done ? { stageId: done } : {}) } });
+      await this.advanceFlow(e.tenantId, p.id).catch((err: Error) => this.log.warn(`Fluxo ${p.id}: ${err.message}`));
     }
     return processes.length;
   }
@@ -214,9 +232,15 @@ export class TasksService {
     if (task.attachment !== 'OPCIONAL' && task.attachments.length === 0) {
       throw new BadRequestException('Anexo obrigatório para concluir esta tarefa.');
     }
+    const tasks = task.process.tasks.map((t) => (t.id === taskId ? { ...t, done: true } : t));
+    const allDone = tasks.every((t) => t.done);
+    // POP: a última etapa (que conclui o processo) só fecha com todos os itens marcados
+    if (allDone) this.config.assertPopComplete(task.process);
     await this.prisma.processTask.update({ where: { id: taskId }, data: { done: true, doneAt: new Date(), doneById: userId } });
 
-    if (task.attachment === 'OBRIGATORIO_CONCLUIR_E_ENVIAR' || sendToClient) {
+    // Se esta etapa conclui o processo e o cliente vai receber o aviso, os anexos seguem junto com ele
+    const willNotify = allDone && (await this.config.shouldNotify(tenantId, task.process.templateId));
+    if (!willNotify && (task.attachment === 'OBRIGATORIO_CONCLUIR_E_ENVIAR' || sendToClient)) {
       for (const a of task.attachments.filter((x) => !x.sentToClientAt)) {
         await this.dispatch.sendFile(tenantId, task.process.clientId, a.fileKey, a.fileName, ['EMAIL', 'WHATSAPP']);
         await this.prisma.taskAttachment.update({ where: { id: a.id }, data: { sentToClientAt: new Date() } });
@@ -224,15 +248,114 @@ export class TasksService {
     }
 
     // Cascata e status do processo
-    const tasks = task.process.tasks.map((t) => (t.id === taskId ? { ...t, done: true } : t));
     if (task.process.template?.cascade) {
       for (const t of cascadeUnlock(tasks)) await this.prisma.processTask.update({ where: { id: t.id }, data: { blocked: t.blocked } });
     }
-    const allDone = tasks.every((t) => t.done);
-    await this.prisma.process.update({
-      where: { id: task.processId },
-      data: allDone ? { status: 'CONCLUIDO', completedAt: new Date() } : { status: 'EM_PROGRESSO' },
+    if (!allDone) {
+      if (task.process.status === 'A_FAZER') await this.prisma.process.update({ where: { id: task.processId }, data: { status: 'EM_PROGRESSO' } });
+      return { concluded: false };
+    }
+    return this.concludeProcess(tenantId, userId, task.processId, willNotify);
+  }
+
+  /** Conclusão do processo: coluna "Concluído", aviso ao cliente (e-mail, WhatsApp e app) e próximo passo do fluxo. */
+  async concludeProcess(tenantId: string, userId: string, processId: string, notify?: boolean) {
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    this.config.assertPopComplete(p);
+    const done = await this.doneStage(tenantId);
+    await this.prisma.process.update({ where: { id: processId }, data: { status: 'CONCLUIDO', completedAt: new Date(), ...(done ? { stageId: done } : {}) } });
+    notify ??= await this.config.shouldNotify(tenantId, p.templateId);
+    let aviso: unknown = null;
+    if (notify) aviso = await this.config.notifyCompletion(tenantId, processId).catch((e) => ({ errors: [(e as Error).message] }));
+    const next = await this.advanceFlow(tenantId, processId).catch((e: Error) => { this.log.warn(`Fluxo ${processId}: ${e.message}`); return null; });
+    await this.prisma.auditLog.create({ data: { tenantId, userId, clientId: p.clientId, action: 'process.concluir', entity: 'Process', entityId: processId, meta: { notify, nextProcessId: next?.id ?? null } } });
+    return { concluded: true, aviso, nextProcessId: next?.id ?? null };
+  }
+
+  private async doneStage(tenantId: string) {
+    return (await this.prisma.boardStage.findFirst({ where: { tenantId, status: 'CONCLUIDO' }, orderBy: { order: 'asc' } }))?.id ?? null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fluxo de tarefas (encadeadas) e quadro Kanban
+  // ---------------------------------------------------------------------------
+  /** Inicia um fluxo para um cliente: cria (ou reaproveita) o processo do 1º passo. */
+  async startFlow(tenantId: string, flowId: string, clientId: string, competence: string) {
+    const flow = await this.prisma.taskFlow.findFirstOrThrow({ where: { id: flowId, tenantId, active: true } });
+    const steps = (flow.steps as { templateId: string; delayDays: number }[]) ?? [];
+    if (!steps.length) throw new BadRequestException('Fluxo sem passos.');
+    return this.createFlowStep(tenantId, flow.id, steps, 0, clientId, competence);
+  }
+
+  private async createFlowStep(tenantId: string, flowId: string, steps: { templateId: string; delayDays: number }[], index: number, clientId: string, competence: string) {
+    const t = await this.prisma.processTemplate.findFirstOrThrow({ where: { id: steps[index].templateId, OR: [{ tenantId }, { tenantId: null }] }, include: { steps: { orderBy: { order: 'asc' } } } });
+    const client = await this.prisma.clientCompany.findFirstOrThrow({ where: { id: clientId, tenantId }, include: { responsibles: true } });
+    const dueDate = steps[index].delayDays ? new Date(Date.now() + steps[index].delayDays * 86_400_000) : undefined;
+    const created = await this.createProcess(tenantId, t, client, competence, await this.holidays(), { flowId, flowStep: index, dueDate });
+    if (created) return created;
+    // Já existia (gerado pelo calendário): só liga ao fluxo
+    const existing = await this.prisma.process.findFirstOrThrow({ where: { tenantId, templateId: t.id, clientId, competence } });
+    return this.prisma.process.update({ where: { id: existing.id }, data: { flowId, flowStep: index } });
+  }
+
+  /** Ao concluir um passo do fluxo, cria o próximo para o responsável do departamento. */
+  async advanceFlow(tenantId: string, processId: string): Promise<{ id: string; status: string } | null> {
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    if (!p.flowId || p.flowStep == null) return null;
+    const flow = await this.prisma.taskFlow.findFirst({ where: { id: p.flowId, tenantId } });
+    const steps = (flow?.steps as { templateId: string; delayDays: number }[] | undefined) ?? [];
+    if (!flow || !flow.active || p.flowStep + 1 >= steps.length) return null;
+    const next = await this.createFlowStep(tenantId, flow.id, steps, p.flowStep + 1, p.clientId, p.competence);
+    return next.status === 'CONCLUIDO' ? this.advanceFlow(tenantId, next.id).then((n: { id: string; status: string } | null) => n ?? next) : next;
+  }
+
+  /** Quadro: colunas do escritório com os processos abertos (e os concluídos nos últimos 15 dias). */
+  async board(tenantId: string, f: { assigneeId?: string; departmentId?: string; competence?: string; clientGroupId?: string }) {
+    const stages = await this.prisma.boardStage.findMany({ where: { tenantId }, orderBy: { order: 'asc' } });
+    const processes = await this.prisma.process.findMany({
+      where: {
+        tenantId, client: { active: true, ...(f.clientGroupId ? { clientGroupIds: { has: f.clientGroupId } } : {}) }, competence: f.competence,
+        OR: [{ status: { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA'] } }, { status: 'CONCLUIDO', completedAt: { gte: new Date(Date.now() - 15 * 86_400_000) } }],
+        ...(f.assigneeId ? { assigneeIds: { has: f.assigneeId } } : {}),
+        ...(f.departmentId ? { departmentIds: { has: f.departmentId } } : {}),
+      },
+      include: { client: { select: { legalName: true, tradeName: true } }, tasks: { select: { done: true } } },
+      orderBy: { dueDate: 'asc' },
+      take: 1500,
     });
+    const first = stages[0]?.id;
+    const byStatus = (st: string) => stages.find((s) => s.status === st)?.id;
+    const cards = processes.map((p) => {
+      const stageId = p.stageId && stages.some((s) => s.id === p.stageId) ? p.stageId
+        : (p.status === 'CONCLUIDO' ? byStatus('CONCLUIDO') : p.status === 'A_FAZER' ? byStatus('A_FAZER') : byStatus('EM_PROGRESSO')) ?? first;
+      const items = Array.isArray(p.popItems) ? (p.popItems as any[]) : [];
+      const checks = (p.popChecks as Record<string, unknown> | null) ?? {};
+      return {
+        id: p.id, title: p.title, competence: p.competence, dueDate: p.dueDate, status: p.status, stageId, assigneeIds: p.assigneeIds,
+        client: p.client.tradeName ?? p.client.legalName, steps: { done: p.tasks.filter((t) => t.done).length, total: p.tasks.length },
+        pop: items.length ? { done: items.filter((i) => checks[i.id]).length, total: items.length } : null, flowStep: p.flowStep,
+      };
+    });
+    return { stages, cards };
+  }
+
+  /** Arrastar o cartão: muda a coluna e o status equivalente. Coluna "Concluído" passa pelas mesmas travas (etapas + POP). */
+  async moveStage(tenantId: string, userId: string, processId: string, stageId: string) {
+    const [stage, p] = await Promise.all([
+      this.prisma.boardStage.findFirstOrThrow({ where: { id: stageId, tenantId } }),
+      this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId }, include: { tasks: true } }),
+    ]);
+    if (p.status === 'DISPENSADO') throw new BadRequestException('Processo dispensado não pode ser movido.');
+    if (stage.status === 'CONCLUIDO') {
+      if (p.status === 'CONCLUIDO') return this.prisma.process.update({ where: { id: processId }, data: { stageId } });
+      const pend = p.tasks.filter((t) => !t.done);
+      if (pend.length) throw new BadRequestException(`Conclua as etapas antes: ${pend.map((t) => t.title).slice(0, 3).join('; ')}`);
+      this.config.assertPopComplete(p);
+      await this.prisma.process.update({ where: { id: processId }, data: { stageId } });
+      return this.concludeProcess(tenantId, userId, processId);
+    }
+    const status = p.status === 'CONCLUIDO' ? 'EM_PROGRESSO' : p.status === 'EM_MULTA' ? 'EM_MULTA' : stage.status === 'A_FAZER' ? 'A_FAZER' : 'EM_PROGRESSO';
+    return this.prisma.process.update({ where: { id: processId }, data: { stageId, status, ...(p.status === 'CONCLUIDO' ? { completedAt: null } : {}) } });
   }
 
   async dismiss(tenantId: string, userId: string, processId: string, reason: string) {
@@ -322,15 +445,17 @@ export class TasksService {
 }
 
 /**
- * O modelo vale para o cliente? Ordem: ajuste manual do cliente > modelo "optIn" > regime > UF.
+ * O modelo vale para o cliente? Ordem: ajuste manual do cliente > agrupador de tarefas > modelo "optIn" > regime > UF.
  * Ex.: "Folha de pagamento" desligada para empresa sem empregados; "DIMOB" ligada só para imobiliárias.
  */
 export function templateApplies(
-  t: { id: string; regimes: string[]; ufs?: string[] | null; optIn?: boolean | null },
-  client: { regime: string; uf?: string | null; obligationRules?: { templateId: string; enabled: boolean }[] },
+  t: { id: string; regimes: string[]; ufs?: string[] | null; optIn?: boolean | null; groupId?: string | null },
+  client: { regime: string; uf?: string | null; taskGroupIds?: string[] | null; obligationRules?: { templateId: string; enabled: boolean }[] },
 ): boolean {
   const rule = client.obligationRules?.find((r) => r.templateId === t.id);
   if (rule) return rule.enabled;
+  // Agrupador de tarefas: modelo com agrupador só vale para clientes marcados com ele (adequação)
+  if (t.groupId && !(client.taskGroupIds ?? []).includes(t.groupId)) return false;
   if (t.optIn) return false;
   if (t.regimes.length && !t.regimes.includes(client.regime)) return false;
   if (t.ufs?.length && !(client.uf && t.ufs.includes(client.uf))) return false;

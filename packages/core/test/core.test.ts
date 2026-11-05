@@ -201,3 +201,29 @@ test('máscaras de CNPJ e CPF no padrão da Receita, inclusive digitando', () =>
   assert.equal(formatDocumento('529.982.247-25'), '529.982.247-25');
   assert.equal(formatDocumento('114447770001'), '11.444.777/0001');
 });
+
+// ---------------- Configurações de Tarefas ----------------
+import { auditEmailDomain, popProgress, renderTemplate, splitEmails, withinAccessHours } from '../src/tarefas';
+
+test('POP: só conclui com todos os itens marcados', () => {
+  const items = [{ id: 'a', text: 'Conferir notas' }, { id: 'b', text: 'Transmitir' }];
+  assert.deepEqual(popProgress(items, { a: { by: 'u', at: 'x' } }), { total: 2, done: 1, complete: false, pending: ['Transmitir'] });
+  assert.equal(popProgress(items, { a: { by: 'u', at: 'x' }, b: { by: 'u', at: 'y' } }).complete, true);
+  assert.equal(popProgress(null, null).complete, true);
+});
+
+test('horário de acesso no fuso de Maceió', () => {
+  const seg8 = [{ weekday: 1, start: '08:00', end: '18:00' }];
+  assert.equal(withinAccessHours(seg8, new Date('2026-11-02T12:00:00Z')), true); // segunda 09:00 em Maceió
+  assert.equal(withinAccessHours(seg8, new Date('2026-11-02T22:00:00Z')), false); // segunda 19:00
+  assert.equal(withinAccessHours(seg8, new Date('2026-11-01T12:00:00Z')), false); // domingo
+  assert.equal(withinAccessHours([], new Date()), true);
+});
+
+test('modelos de mensagem e e-mails múltiplos', () => {
+  assert.equal(renderTemplate('Olá, {{contato}}! {{cliente.razao}} {{x}}', { contato: 'Ana', cliente: { razao: 'ACME' } }), 'Olá, Ana! ACME ');
+  assert.deepEqual(splitEmails('a@x.com; B@y.com,a@x.com  inválido'), ['a@x.com', 'b@y.com']);
+  const r = auditEmailDomain({ domain: 'x.com.br', spf: ['v=spf1 include:_spf.google.com ~all'], dmarc: [], dkimSelectors: [{ selector: 'google', found: true }], mx: ['mx.x.com.br'] });
+  assert.equal(r.score, 3);
+  assert.equal(r.checks.find((c) => c.key === 'dmarc')!.ok, false);
+});

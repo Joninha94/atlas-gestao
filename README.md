@@ -102,8 +102,8 @@ apps/
   rpa/        src/worker.ts (fila "rpa" → "rpa.result") · src/fgts-digital.robot.ts
   agent/      agente.mjs · instalar.ps1 (Agendador de Tarefas do Windows) · scripts/build-exe.mjs
 packages/
-  core/       documents, simples, dctfweb, schedule, recurrence, communication, reforma, drive, xml
-  db/         prisma/schema.prisma, migrations (0001–0004), roles.sql, rls.sql, seed.ts, obrigacoes.ts (catálogo)
+  core/       documents, simples, dctfweb, schedule, recurrence, communication, reforma, drive, xml, cnpjws, tarefas
+  db/         prisma/schema.prisma, migrations (0001–0006), roles.sql, rls.sql, seed.ts, obrigacoes.ts (catálogo), src/padroes-tarefas.ts (POPs, mensagens, quadro, fluxos)
 docker/       api, web, rpa, mobile-web Dockerfiles
 ```
 
@@ -123,6 +123,10 @@ docker/       api, web, rpa, mobile-web Dockerfiles
 | Notas — painéis (receita, custo, frete, melhores clientes, fornecedores, produtos, concentração), reforma tributária e oportunidades | `core/xml.ts` · `core/reforma.ts` | Notas → Painel / Reforma |
 | **Tarefas** — catálogo de 83 obrigações (federais, estaduais, municipais, trabalhistas, contábeis, PF e avulsas) com prazo em dia útil, N-ésimo dia útil, UF e base legal; recorrência, prazos com feriados, multa, cascata, anexo obrigatório, conclusão automática pelo Monitor, arrasta-e-solta inteligente, modelos e formulários por IA, dispensa com justificativa, edição em lote, calendário | `modules/tasks` · `core/recurrence.ts` | Tarefas |
 | **Obrigações por cliente** — o padrão vem do regime/UF; o time ativa as opcionais (IPI, DIMOB, DMED, VT…) e desliga o que não se aplica; ativar já cria a tarefa do mês | `TasksService.clientObligations/setClientObligation` · `PUT /tasks/clients/:id/obligations/:templateId` | Clientes → Obrigações |
+| **Tarefas → Configurar** — hub com Dados da empresa (regimes, agrupadores de clientes e de tarefas, horários de acesso, geração), recorrentes, solicitações de serviço, fluxos, templates de documentos, usuários (funcionários e do app), responsabilidades em lote, adequação de agrupadores, templates de envio, endereço customizado e auditoria do domínio (SPF/DKIM/DMARC/MX) | `task-config.controller.ts` · `task-config.service.ts` · `core/tarefas.ts` | Tarefas → Configurar |
+| **POP na tarefa** — checklist copiado do modelo para o processo; marca/desmarca com autor e hora; a última etapa (e a coluna Concluído do quadro) só fecha com todos os itens marcados | `PUT /tasks/processes/:id/pop/:itemId` · `assertPopComplete` | Tarefas → Processos (detalhe) |
+| **Aviso de conclusão ao cliente** — todos os e-mails do contato (separados por `;`), WhatsApp com os anexos, aviso no app + push; modelos editáveis por canal; reenviar aviso | `TaskConfigService.notifyCompletion` · `GET /app/notifications` | Configurar → Templates de envio · App → sino/Avisos (banner estilo WhatsApp) |
+| **Quadro (Kanban) e fluxos encadeados** — colunas do escritório; ao concluir um passo do fluxo, o próximo nasce para o responsável | `TasksService.board/moveStage/advanceFlow` | Tarefas → Quadro · Configurar → Fluxo de tarefas |
 | Ordens de serviço — cliente preenche no app → processo para o responsável | `ClientAppService.submitServiceForm` | App → Solicitar serviço / Tarefas → Formulários |
 | **Drive** — pasta por cliente, pastas de sistema (PGDAS/ano/mês…), compartilhar com o cliente, permissão de envio, lixeira 20 dias | `modules/drive` · `core/drive.ts` | Drive / App → Documentos |
 | **Clientes** — cadastro pelo CNPJ (QSA), importação por planilha, carteira por UF/região/regime/natureza, certificado e procuração, Checkup 360 (PDF) | `modules/clients` | Clientes |
@@ -151,10 +155,10 @@ docker/       api, web, rpa, mobile-web Dockerfiles
 
 Executado de verdade, contra **Postgres 16 e Redis reais**, em modo sandbox:
 
-- `packages/core`: **13/13** testes unitários (inclui prazos em N-ésimo dia útil e anuais no mesmo ano).
+- `packages/core`: **18/18** testes unitários (inclui prazos em N-ésimo dia útil, POP, horário de acesso no fuso de Maceió e auditoria de domínio).
 - `apps/api/test/xmldsig.test.mjs`: **2/2** (assinatura XMLDSig validada).
 - `apps/agent`: **3/3** testes (inclusive proteção contra caminho malicioso dentro do ZIP).
-- `apps/api/test/e2e.mjs`: **37/37** cenários ponta a ponta — login/2FA/refresh, RLS entre escritórios, cadastro por CNPJ, Monitor completo (DAS, MEI, DCTFWeb, FGTS, parcelamentos, recálculo, rastreio, comprovantes, caixa postal), WhatsApp + URA + IA, listas e lote, chat interno, notas (captura, manifestação, exportação, painéis), tarefas (geração, cascata, conclusão automática, OS), drive, app do cliente e App+, obrigações por cliente, agente local entregando XML numa pasta e alerta de job com falha.
+- `apps/api/test/e2e.mjs`: **43/43** cenários ponta a ponta — login/2FA/refresh, RLS entre escritórios, cadastro por CNPJ, Monitor completo (DAS, MEI, DCTFWeb, FGTS, parcelamentos, recálculo, rastreio, comprovantes, caixa postal), WhatsApp + URA + IA, listas e lote, chat interno, notas (captura, manifestação, exportação, painéis), tarefas (geração, cascata, conclusão automática, OS), drive, app do cliente e App+, obrigações por cliente, agente local entregando XML numa pasta, alerta de job com falha, consulta CNPJ, papel timbrado, POP travando a conclusão + aviso ao cliente por e-mail/WhatsApp/app, fluxo encadeado, quadro, agrupadores, horário de acesso e domínio de e-mail.
 - Pacote de produção da API (`pnpm deploy`) montado e executado: sobe, autentica e responde.
 - Painel web: `next build` sem erros, todas as telas renderizadas e revisadas com dados de demonstração.
 - App do cliente: TypeScript sem erros, `expo export -p web` gerado e todas as 11 telas abertas num viewport de celular contra a API real (0 erros de console/rede).

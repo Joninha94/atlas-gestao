@@ -40,7 +40,9 @@ export class MailerService {
       secure: (t.smtpPort ?? 587) === 465,
       auth: { user: t.smtpUser ?? '', pass: this.vault.openString(t.smtpPassEnc) },
     });
-    const info = await transport.sendMail({ from: t.emailFrom ?? t.smtpUser ?? '', to: mail.to, subject: mail.subject, html, attachments: mail.attachments });
+    const fromAddr = t.emailFrom ?? t.smtpUser ?? '';
+    const from = t.emailFromName && fromAddr && !fromAddr.includes('<') ? `"${t.emailFromName.replace(/"/g, '')}" <${fromAddr}>` : fromAddr;
+    const info = await transport.sendMail({ from, replyTo: t.emailReplyTo ?? undefined, to: mail.to, subject: mail.subject, html, attachments: mail.attachments });
     return { messageId: info.messageId };
   }
 

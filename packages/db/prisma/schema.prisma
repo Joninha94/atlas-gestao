@@ -255,6 +255,9 @@ model Tenant {
   accountantName String? // contador responsável que assina as declarações
   accountantCrc  String?
   accountantCpf  String?
+  taskSettings   Json?   // geração de tarefas: {onClientCreate, monthlyDay, notifyClientDefault}
+  emailFromName  String? // nome do remetente (ex.: Produtiva Contabilidade)
+  emailReplyTo   String?
   // Parametrização de disparo
   smtpHost      String?
   smtpPort      Int?
@@ -286,6 +289,7 @@ model User {
   role         UserRole  @default(COLABORADOR)
   totpSecretEnc String?
   totpEnabled  Boolean   @default(false)
+  accessHours  Json?     // [{weekday 0-6, start "08:00", end "18:00"}] — vazio = sem restrição
   active       Boolean   @default(true)
   departments  UserDepartment[]
   responsibleFor ClientResponsible[]
@@ -386,6 +390,8 @@ model ClientCompany {
   district         String?
   zipCode          String?
   legalRepName     String?    // sócio/representante que assina declarações (padrão: 1º sócio do QSA)
+  clientGroupIds   String[]   @default([]) // agrupadores de clientes
+  taskGroupIds     String[]   @default([]) // agrupadores de tarefas que se aplicam (adequação)
   municipalRegistration String? // inscrição municipal
   openedAt         DateTime?
   partners         Json?      // QSA
@@ -963,6 +969,14 @@ model Process {
   departmentIds String[]
   completedAt  DateTime?
   tasks        ProcessTask[]
+  popId        String?         // POP usado (cópia do texto fica em popTitle/popItems)
+  popTitle     String?
+  popItems     Json?           // [{id, text}] — cópia do POP no momento da criação
+  popChecks    Json?           // {itemId: {by, byName, at}} — itens marcados
+  stageId      String?         // coluna do quadro (BoardStage)
+  flowId       String?         // fluxo de tarefas encadeadas
+  flowStep     Int?
+  notifiedAt   DateTime?       // aviso de conclusão enviado ao cliente
   comments     TaskComment[]
 
   @@unique([templateId, clientId, competence])
@@ -1102,4 +1116,119 @@ model PushToken {
   contactId String
   token     String @unique
   platform  String // ios | android | web
+}
+
+// -----------------------------------------------------------------------------
+// CONFIGURAÇÕES DE TAREFAS
+// -----------------------------------------------------------------------------
+
+/** Procedimento Operacional Padrão: checklist que precisa estar todo marcado para concluir a tarefa. */
+model Pop {
+  id           String   @id @default(uuid())
+  tenantId     String?  // null = POP padrão (sugestão), visível a todos
+  title        String
+  description  String?
+  items        Json     // [{id, text}]
+  departmentId String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+/** Ajustes do escritório para um modelo (inclusive os globais): POP, agrupador e aviso ao cliente. */
+model TemplateSetting {
+  tenantId     String
+  templateId   String
+  popId        String?
+  groupId      String?  // TaskGroup
+  notifyClient Boolean  @default(true)
+  updatedAt    DateTime @updatedAt
+
+  @@id([tenantId, templateId])
+}
+
+/** Agrupador de tarefas (ex.: "Departamento Pessoal completo", "Só fiscal"). */
+model TaskGroup {
+  id          String  @id @default(uuid())
+  tenantId    String
+  name        String
+  color       String  @default("#1d7871")
+  description String?
+
+  @@unique([tenantId, name])
+}
+
+/** Agrupador de clientes (ex.: "Comércio", "Clínicas", "VIP"). */
+model ClientGroup {
+  id       String @id @default(uuid())
+  tenantId String
+  name     String
+  color    String @default("#6366f1")
+
+  @@unique([tenantId, name])
+}
+
+/** Colunas do quadro (Kanban) por onde os processos passam. */
+model BoardStage {
+  id       String @id @default(uuid())
+  tenantId String
+  name     String
+  order    Int
+  color    String @default("#94a3b8")
+  status   ProcessStatus @default(EM_PROGRESSO) // status equivalente (A_FAZER, EM_PROGRESSO, CONCLUIDO)
+
+  @@index([tenantId, order])
+}
+
+/** Fluxo de tarefas encadeadas: ao concluir um passo, o próximo é criado para o responsável. */
+model TaskFlow {
+  id          String   @id @default(uuid())
+  tenantId    String
+  name        String
+  description String?
+  steps       Json     // [{templateId, delayDays}]
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+/** Modelo de documento com variáveis ({{cliente.razao_social}}…) gerado em PDF no papel timbrado. */
+model DocumentTemplate {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  category  String?
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/** Modelo de mensagem por evento e canal (e-mail, WhatsApp, app). Globais (tenantId nulo) são o padrão. */
+model MessageTemplate {
+  id        String  @id @default(uuid())
+  tenantId  String?
+  event     String  // TAREFA_CONCLUIDA | GUIA_DISPONIVEL | DOCUMENTO_NOVO
+  channel   String  // EMAIL | WHATSAPP | APP
+  subject   String?
+  body      String
+  active    Boolean @default(true)
+
+  @@unique([tenantId, event, channel])
+}
+
+/** Avisos que aparecem no app do cliente (com push no celular). */
+model ClientNotification {
+  id        String    @id @default(uuid())
+  tenantId  String
+  clientId  String
+  contactId String?   // null = todos os contatos com acesso ao app
+  kind      String    // TAREFA_CONCLUIDA | GUIA | DOCUMENTO | MENSAGEM
+  title     String
+  body      String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([clientId, readAt])
 }

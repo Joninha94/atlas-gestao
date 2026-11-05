@@ -21,6 +21,7 @@ x-env: &env
     STORAGE_DRIVER: local
     STORAGE_DIR: /data/storage
     PUBLIC_API_URL: http://localhost:3333
+    PUBLIC_APP_URL: http://localhost:8081
     WEB_ORIGIN: http://localhost:3000,http://localhost:8081
     BROADCAST_DELAY_MS: "500"
     SEED_TENANT_CNPJ: "11444777000161"

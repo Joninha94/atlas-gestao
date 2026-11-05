@@ -3,13 +3,16 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Loading, C } from '../components/ui';
-import { Session, loadSession, onSession } from '../lib/api';
+import { OFFICE_CNPJ, Session, api, loadSession, onSession } from '../lib/api';
+import { AvisosProvider } from '../lib/avisos';
 import { registerPush } from '../lib/push';
 
 export default function RootLayout() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const segments = useSegments();
   const router = useRouter();
+  const [brand, setBrand] = useState<{ name: string | null; logoUrl: string | null }>({ name: null, logoUrl: null });
+  useEffect(() => { api(`/public/branding/${OFFICE_CNPJ}`).then(setBrand).catch(() => undefined); }, []);
 
   useEffect(() => {
     loadSession().then(setSession);
@@ -33,6 +36,7 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <StatusBar style="light" />
+      <MaybeAvisos enabled={!!session} logoUrl={brand.logoUrl} officeName={brand.name}>
       <Stack screenOptions={{ headerStyle: { backgroundColor: C.brandDark }, headerTintColor: C.white, headerTitleStyle: { fontWeight: '600' }, contentStyle: { backgroundColor: C.bg } }}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="login" options={{ headerShown: false }} />
@@ -43,7 +47,14 @@ export default function RootLayout() {
         <Stack.Screen name="caixa-postal" options={{ title: 'Caixa postal e-CAC' }} />
         <Stack.Screen name="nfse" options={{ title: 'Emitir NFS-e' }} />
         <Stack.Screen name="relatorios" options={{ title: 'Relatórios de notas' }} />
+        <Stack.Screen name="avisos" options={{ title: 'Avisos do escritório' }} />
       </Stack>
+      </MaybeAvisos>
     </SafeAreaProvider>
   );
+}
+
+/** Avisos só existem com sessão (as rotas /app/* exigem login). */
+function MaybeAvisos({ enabled, children, logoUrl, officeName }: { enabled: boolean; children: React.ReactNode; logoUrl: string | null; officeName: string | null }) {
+  return enabled ? <AvisosProvider logoUrl={logoUrl} officeName={officeName}>{children}</AvisosProvider> : <>{children}</>;
 }

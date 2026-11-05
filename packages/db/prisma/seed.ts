@@ -7,6 +7,7 @@
  */
 import { createPrismaClient } from '../src';
 import { OBRIGACOES, RENAMES } from './obrigacoes';
+import { DOCUMENTOS, ETAPAS, FLUXOS, MENSAGENS, POPS } from '../src/padroes-tarefas';
 import argon2 from 'argon2';
 
 // Seed roda com o papel de sistema (BYPASSRLS) para criar dados de qualquer escritório.
@@ -149,6 +150,39 @@ async function main() {
   for (const f of FORMS) {
     const exists = await prisma.serviceForm.findFirst({ where: { tenantId: null, name: f.name } });
     if (!exists) await prisma.serviceForm.create({ data: { tenantId: null, name: f.name, departmentId: depts[f.dept], fields: f.fields } });
+  }
+
+  // --- Configurações de Tarefas: POPs, mensagens, quadro, fluxos e documentos (só cria o que falta) ---
+  const tplId = async (name: string) => (await prisma.processTemplate.findFirst({ where: { tenantId: null, name } }))?.id;
+  for (const p of POPS) {
+    let pop = await prisma.pop.findFirst({ where: { tenantId: null, title: p.title } });
+    if (!pop) pop = await prisma.pop.create({ data: { tenantId: null, title: p.title, description: p.description, departmentId: depts[p.dept], items: p.items.map((text, i) => ({ id: `i${i + 1}`, text })) } });
+    for (const name of p.templates) {
+      const templateId = await tplId(name);
+      if (templateId) await prisma.templateSetting.upsert({ where: { tenantId_templateId: { tenantId: tenant.id, templateId } }, create: { tenantId: tenant.id, templateId, popId: pop.id }, update: {} });
+    }
+  }
+  for (const m of MENSAGENS) {
+    const exists = await prisma.messageTemplate.findFirst({ where: { tenantId: null, event: m.event, channel: m.channel } });
+    if (!exists) await prisma.messageTemplate.create({ data: { tenantId: null, ...m } });
+  }
+  if (!(await prisma.boardStage.count({ where: { tenantId: tenant.id } }))) {
+    await prisma.boardStage.createMany({ data: ETAPAS.map((e, i) => ({ tenantId: tenant.id, order: i + 1, ...e })) });
+  }
+  for (const f of FLUXOS) {
+    if (await prisma.taskFlow.findFirst({ where: { tenantId: tenant.id, name: f.name } })) continue;
+    const steps = [];
+    for (const st of f.steps) { const id = await tplId(st.template); if (id) steps.push({ templateId: id, delayDays: st.delayDays }); }
+    await prisma.taskFlow.create({ data: { tenantId: tenant.id, name: f.name, description: f.description, steps } });
+  }
+  for (const d of DOCUMENTOS) {
+    if (!(await prisma.documentTemplate.findFirst({ where: { tenantId: tenant.id, name: d.name } }))) await prisma.documentTemplate.create({ data: { tenantId: tenant.id, ...d } });
+  }
+  for (const name of ['Departamento Pessoal', 'Fiscal mensal', 'Contábil completo', 'Societário']) {
+    await prisma.taskGroup.upsert({ where: { tenantId_name: { tenantId: tenant.id, name } }, create: { tenantId: tenant.id, name }, update: {} });
+  }
+  for (const [name, color] of [['Comércio', '#0ea5e9'], ['Serviços', '#6366f1'], ['Clínicas e saúde', '#ec4899'], ['VIP', '#f59e0b']]) {
+    await prisma.clientGroup.upsert({ where: { tenantId_name: { tenantId: tenant.id, name } }, create: { tenantId: tenant.id, name, color }, update: {} });
   }
 
   console.log(`Seed ok: ${OBRIGACOES.length} modelos de obrigações (${created} novos, ${updated} atualizados), ${FORMS.length} formulários.`);

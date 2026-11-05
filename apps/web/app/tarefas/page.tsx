@@ -2,13 +2,15 @@
 import clsx from 'clsx';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Copy, FileDown, Lock, Paperclip, Send, Sparkles, Upload, Wand2 } from 'lucide-react';
+import { BellRing, Check, ChevronDown, ChevronRight, ClipboardCheck, Copy, FileDown, Lock, Paperclip, Send, Settings2, Sparkles, Upload, Wand2 } from 'lucide-react';
+import { Board } from './quadro';
+import { Configurar } from './configurar';
 import { apiPost, apiPut, apiDelete, download, getSession, uploadFiles } from '../../lib/api';
 import { useAction, useApi } from '../../lib/hooks';
 import { competence, date, dateTime, label, lastCompetence } from '../../lib/format';
 import { Badge, Button, Card, Empty, Field, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Table, Tabs } from '../../components/ui';
 
-type Tab = 'lista' | 'calendario' | 'arraste' | 'modelos' | 'os';
+type Tab = 'lista' | 'quadro' | 'calendario' | 'arraste' | 'modelos' | 'os' | 'configurar';
 
 export default function TarefasPage() {
   return <Suspense fallback={<Loading />}><Tarefas /></Suspense>;
@@ -20,16 +22,19 @@ function Tarefas() {
   const { data: dash } = useApi<any>('/tasks/dashboard');
   return (
     <div>
-      <PageHeader title="Tarefas" subtitle="Obrigações acessórias recorrentes, modelos por regime, cascata, anexos e ordens de serviço dos clientes." />
+      <PageHeader title="Tarefas" subtitle="Obrigações acessórias recorrentes, modelos por regime, POP, cascata, anexos e ordens de serviço dos clientes."
+        actions={<Button variant={tab === 'configurar' ? 'primary' : 'secondary'} onClick={() => setTab('configurar')}><Settings2 size={15} /> Configurar</Button>} />
       {dash && <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="A fazer" value={dash.aFazer} /><Stat label="Em progresso" value={dash.emProgresso} /><Stat label="Em multa" value={dash.emMulta} tone={dash.emMulta ? 'red' : undefined} /><Stat label="Concluídas (30 dias)" value={dash.concluidos30d} tone="green" />
       </div>}
-      <Tabs value={tab} onChange={setTab} tabs={[{ id: 'lista', label: 'Processos' }, { id: 'calendario', label: 'Calendário' }, { id: 'arraste', label: 'Arrasta-e-solta inteligente' }, { id: 'modelos', label: 'Modelos de obrigações' }, { id: 'os', label: 'Formulários e ordens de serviço' }]} />
+      <Tabs value={tab} onChange={setTab} tabs={[{ id: 'lista', label: 'Processos' }, { id: 'quadro', label: 'Quadro' }, { id: 'calendario', label: 'Calendário' }, { id: 'arraste', label: 'Arrasta-e-solta inteligente' }, { id: 'modelos', label: 'Modelos de obrigações' }, { id: 'os', label: 'Formulários e ordens de serviço' }, { id: 'configurar', label: 'Configurar' }]} />
       {tab === 'lista' && <List initialStatus={params.get('status') ?? ''} mine={params.get('mine') === '1'} />}
       {tab === 'calendario' && <Calendar />}
       {tab === 'arraste' && <SmartDrop />}
       {tab === 'modelos' && <Templates />}
       {tab === 'os' && <Orders />}
+      {tab === 'quadro' && <Board />}
+      {tab === 'configurar' && <Configurar onOpenTab={(t) => setTab(t as Tab)} />}
     </div>
   );
 }
@@ -73,7 +78,7 @@ function List({ initialStatus, mine }: { initialStatus: string; mine: boolean })
                   <button onClick={() => toggle(open, setOpen, p.id)} className="text-ink-muted">{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{p.title} <span className="font-normal text-ink-muted">· {p.client.legalName}</span></div>
-                    <div className="text-xs text-ink-muted">Comp. {competence(p.competence)} · {done}/{p.tasks.length} etapas · {p.assigneeIds.map(uname).join(', ') || 'sem responsável'}</div>
+                    <div className="text-xs text-ink-muted">Comp. {competence(p.competence)} · {done}/{p.tasks.length} etapas{Array.isArray(p.popItems) && p.popItems.length > 0 && <> · POP {Object.keys(p.popChecks ?? {}).filter((k) => p.popItems.some((i: any) => i.id === k)).length}/{p.popItems.length}</>} · {p.assigneeIds.map(uname).join(', ') || 'sem responsável'}{p.notifiedAt && <> · <span className="text-emerald-700">cliente avisado</span></>}</div>
                   </div>
                   <div className={clsx('text-sm tabular-nums', p.status !== 'CONCLUIDO' && new Date(p.dueDate) < new Date() && 'font-semibold text-red-600')}>{date(p.dueDate)}</div>
                   <StatusBadge status={p.status} />
@@ -105,13 +110,48 @@ function ProcessDetail({ id, onChange }: { id: string; onChange: () => void }) {
   const { busy, run } = useAction();
   if (!p) return <Loading />;
   const refresh = () => { reload(); onChange(); };
+  const popItems: { id: string; text: string }[] = Array.isArray(p.popItems) ? p.popItems : [];
+  const checks: Record<string, { byName?: string; at: string }> = p.popChecks ?? {};
+  const popDone = popItems.filter((i) => checks[i.id]).length;
+  const popOk = popDone === popItems.length;
+  const closed = ['CONCLUIDO', 'DISPENSADO'].includes(p.status);
+  const pendingTasks = p.tasks.filter((t: any) => !t.done);
   return (
     <div className="grid gap-4 bg-slate-50/70 px-10 py-4 lg:grid-cols-[1fr_320px]">
+      <div className="space-y-3">
+      {popItems.length > 0 && (
+        <section className={clsx('rounded-md border bg-white p-3', popOk ? 'border-emerald-200' : 'border-amber-200')} aria-label="POP">
+          <div className="mb-2 flex items-center gap-2">
+            <ClipboardCheck size={16} className={popOk ? 'text-emerald-600' : 'text-amber-600'} />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-semibold">{p.popTitle ?? 'POP'}</div>
+              <div className="text-xs text-ink-muted">{popOk ? 'Todos os itens conferidos: pode concluir.' : `Marque todos os itens para liberar a conclusão (${popDone}/${popItems.length}).`}</div>
+            </div>
+            <div className="w-24"><div className="h-1.5 overflow-hidden rounded bg-slate-100"><div className={clsx('h-full transition-all', popOk ? 'bg-emerald-500' : 'bg-amber-500')} style={{ width: `${(popDone / popItems.length) * 100}%` }} /></div></div>
+          </div>
+          <ul className="space-y-1">
+            {popItems.map((i) => {
+              const c = checks[i.id];
+              return (
+                <li key={i.id}>
+                  <label className={clsx('flex cursor-pointer items-start gap-2 rounded px-1.5 py-1 text-sm hover:bg-slate-50', closed && 'cursor-default')}>
+                    <input type="checkbox" className="mt-0.5" disabled={closed || busy} checked={!!c} onChange={(e) => run(async () => { await apiPut(`/tasks/processes/${id}/pop/${i.id}`, { checked: e.target.checked }); refresh(); })} />
+                    <span className={clsx('flex-1', c && 'text-ink-muted')}>{i.text}{c && <span className="ml-1 text-[11px] text-ink-muted">· {c.byName?.split(' ')[0] ?? ''} {dateTime(c.at)}</span>}</span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
       <ol className="space-y-2">
-        {p.tasks.map((t: any) => (
+        {p.tasks.map((t: any) => {
+          const lastOpen = pendingTasks.length === 1 && pendingTasks[0].id === t.id;
+          const popLock = lastOpen && !popOk;
+          return (
           <li key={t.id} className={clsx('rounded-md border bg-white p-3', t.blocked && 'opacity-60')}>
             <div className="flex items-center gap-3">
-              <button disabled={t.done || t.blocked || busy} onClick={() => run(() => apiPost(`/tasks/tasks/${t.id}/complete`, {}).then(refresh), 'Etapa concluída.')} className={clsx('grid h-5 w-5 shrink-0 place-items-center rounded border', t.done ? 'border-brand-600 bg-brand-600 text-white' : 'border-slate-300 hover:border-brand-500')}>{t.done && <Check size={13} />}{t.blocked && !t.done && <Lock size={11} className="text-ink-muted" />}</button>
+              <button title={popLock ? 'Marque todos os itens do POP para concluir' : lastOpen ? 'Concluir (encerra o processo e avisa o cliente)' : 'Concluir etapa'} disabled={t.done || t.blocked || busy || popLock} onClick={() => run(() => apiPost<any>(`/tasks/tasks/${t.id}/complete`, {}).then((r) => { refresh(); return r; }), lastOpen ? 'Processo concluído. Cliente avisado por e-mail, WhatsApp e app.' : 'Etapa concluída.')} className={clsx('grid h-5 w-5 shrink-0 place-items-center rounded border', t.done ? 'border-brand-600 bg-brand-600 text-white' : popLock ? 'border-amber-300 bg-amber-50' : 'border-slate-300 hover:border-brand-500')}>{t.done && <Check size={13} />}{((t.blocked && !t.done) || popLock) && <Lock size={11} className={popLock ? 'text-amber-600' : 'text-ink-muted'} />}</button>
               <div className="min-w-0 flex-1">
                 <div className={clsx('text-sm', t.done && 'text-ink-muted line-through')}>{t.order}. {t.title}</div>
                 <div className="text-xs text-ink-muted">prazo {date(t.dueDate)} · {label(t.priority)}{t.attachment !== 'OPCIONAL' && <> · <Badge tone="amber">{t.attachment === 'OBRIGATORIO_CONCLUIR_E_ENVIAR' ? 'anexo obrigatório + envio ao cliente' : 'anexo obrigatório'}</Badge></>}</div>
@@ -119,9 +159,19 @@ function ProcessDetail({ id, onChange }: { id: string; onChange: () => void }) {
               <label className="cursor-pointer text-xs text-brand-700 hover:underline"><Paperclip size={13} className="mr-1 inline" />Anexar<input type="file" multiple className="hidden" onChange={(e) => e.target.files && run(async () => { const f = await uploadFiles(e.target.files!, { withText: 'false' }); await apiPost(`/tasks/tasks/${t.id}/attachments`, { files: f }); reload(); }, 'Anexo adicionado.')} /></label>
             </div>
             {t.attachments.length > 0 && <ul className="ml-8 mt-2 space-y-0.5 text-xs">{t.attachments.map((a: any) => <li key={a.id}>📎 {a.fileName} {a.matchedByAi && <Badge tone="violet">IA</Badge>} {a.sentToClientAt && <span className="text-emerald-700">· enviado {dateTime(a.sentToClientAt)}</span>}</li>)}</ul>}
+            {popLock && <p className="ml-8 mt-1 text-xs text-amber-700">Bloqueada até conferir todo o POP acima.</p>}
           </li>
-        ))}
+          );
+        })}
       </ol>
+      {p.status === 'CONCLUIDO' && (
+        <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          <BellRing size={15} />
+          <span className="flex-1">{p.notifiedAt ? `Cliente avisado em ${dateTime(p.notifiedAt)} (e-mail, WhatsApp e app).` : 'Concluído sem aviso ao cliente (desligado neste modelo).'}</span>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(async () => { await apiPost(`/tasks/processes/${id}/notify`, {}); refresh(); }, 'Aviso reenviado ao cliente.')}>{p.notifiedAt ? 'Reenviar aviso' : 'Avisar agora'}</Button>
+        </div>
+      )}
+      </div>
       <div>
         <div className="mb-2 text-xs font-semibold uppercase text-ink-muted">Comentários</div>
         <div className="max-h-60 space-y-2 overflow-y-auto">{p.comments.map((c: any) => <div key={c.id} className="rounded-md bg-white p-2 text-sm"><span className="font-medium">{users?.find((u) => u.id === c.authorId)?.name ?? '—'}</span> <span className="text-[11px] text-ink-muted">{dateTime(c.at)}</span><div>{c.body}</div></div>)}</div>
