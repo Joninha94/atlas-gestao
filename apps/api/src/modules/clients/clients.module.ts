@@ -14,6 +14,7 @@ import { VaultService } from '../../common/vault.service';
 import { ClientCreatedEvent, Events } from '../../common/events';
 import { CnpjService } from '../../integrations/cnpj/cnpj.service';
 import { StorageService } from '../../integrations/storage/storage.service';
+import { relacaoFaturamentoPdf } from '../../integrations/declaracoes/relacao-faturamento';
 import { CertificatesService } from '../../integrations/certificates.service';
 import { IntegraContadorClient, SERPRO_SERVICES } from '../../integrations/serpro/integra-contador.client';
 import { simplePdf } from '../../integrations/pdf.util';
@@ -46,6 +47,12 @@ const UpdateClientSchema = z.object({
   extraData: z.record(z.string(), z.unknown()).optional(),
   stateRegistration: z.string().optional(),
   municipalRegistration: z.string().optional(),
+  street: z.string().max(200).optional(),
+  district: z.string().max(100).optional(),
+  city: z.string().max(100).optional(),
+  uf: z.string().length(2).transform((v) => v.toUpperCase()).optional(),
+  zipCode: z.string().transform((v) => v.replace(/\D/g, '')).optional(),
+  legalRepName: z.string().max(150).optional(),
   appAccess: z.boolean().optional(),
   appPlus: z.boolean().optional(),
   active: z.boolean().optional(),
@@ -89,6 +96,10 @@ export class ClientsService {
         uf: data?.uf,
         city: data?.city,
         ibgeCity: data?.ibgeCity,
+        street: data?.street,
+        district: data?.district,
+        zipCode: data?.zipCode,
+        legalRepName: data?.partners?.[0]?.name,
         openedAt: data?.openedAt ? new Date(data.openedAt) : undefined,
         partners: (data?.partners ?? []) as any,
         rawCnpjData: (data?.raw ?? undefined) as any,
@@ -233,19 +244,51 @@ export class ClientsService {
     };
   }
 
-  /** PDF assinado digitalmente pelo escritório (A1): Checkup 360 ou relação de faturamento 12 meses. */
-  async signedPdf(tenantId: string, clientId: string, kind: 'checkup' | 'faturamento') {
-    const data = await this.checkup360(clientId);
-    const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } });
-    const c = data.client;
-    const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-    const header: [string, string][] = [['Empresa', c.legalName], ['CNPJ/CPF', formatDocument(c.document)], ['Regime', c.regime]];
-    let lines: (string | [string, string])[];
-    if (kind === 'faturamento') {
-      const total = data.faturamento12m.reduce((s, r) => s + r.revenue, 0);
-      lines = [...header, '', 'Relação de faturamento — últimos 12 meses', '', ...data.faturamento12m.map((r) => [r.competence.split('-').reverse().join('/'), brl(r.revenue)] as [string, string]), '', ['Total', brl(total)]];
+  /**
+   * Faturamento mês a mês para a Relação de Faturamento: 12 meses terminando em `ate` (padrão: mês anterior).
+   * Fonte: PGDAS-D (Simples); sem ele, soma das notas de saída e serviços prestados autorizadas.
+   */
+  async faturamentoMensal(clientId: string, ate?: string) {
+    const fim = ate && /^\d{4}-\d{2}$/.test(ate) ? ate : (() => { const d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1)).toISOString().slice(0, 7); })();
+    const [fy, fm] = fim.split('-').map(Number);
+    const meses = Array.from({ length: 12 }, (_, i) => new Date(Date.UTC(fy, fm - 12 + i, 1)).toISOString().slice(0, 7));
+    const snaps = await this.prisma.revenueSnapshot.findMany({ where: { clientId, competence: { in: meses } } });
+    const pgdas = snaps.filter((r) => r.source === 'PGDASD');
+    let valores: Record<string, number>;
+    let fonte: 'PGDASD' | 'XML';
+    if (pgdas.length) {
+      fonte = 'PGDASD';
+      valores = Object.fromEntries(pgdas.map((r) => [r.competence, Number(r.revenue)]));
     } else {
-      lines = [
+      fonte = 'XML';
+      const docs = await this.prisma.fiscalDocument.groupBy({ by: ['competence'], where: { clientId, competence: { in: meses }, status: 'AUTORIZADA', direction: { in: ['SAIDA', 'PRESTADO'] } }, _sum: { totalAmount: true } });
+      valores = Object.fromEntries(docs.map((d) => [d.competence, Number(d._sum.totalAmount ?? 0)]));
+    }
+    return { fonte, meses: meses.map((competence) => ({ competence, valor: Math.round((valores[competence] ?? 0) * 100) / 100 })) };
+  }
+
+  /** PDF assinado digitalmente pelo escritório (A1): Checkup 360 ou Relação de Faturamento (papel timbrado). */
+  async signedPdf(tenantId: string, clientId: string, kind: 'checkup' | 'faturamento', ate?: string) {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+    const logo = tenant.logoKey ? await this.storage.get(tenant.logoKey).catch(() => null) : null;
+    let raw: Buffer;
+    let c: { document: string };
+    const title = kind === 'faturamento' ? 'Relação de Faturamento' : 'Checkup 360';
+    if (kind === 'faturamento') {
+      const client = await this.prisma.clientCompany.findFirstOrThrow({ where: { id: clientId } });
+      c = client;
+      const { meses } = await this.faturamentoMensal(clientId, ate);
+      const partners = (client.partners as { name: string }[] | null) ?? [];
+      raw = await relacaoFaturamentoPdf(tenant, logo, {
+        empresa: { ...client, legalRepName: client.legalRepName ?? partners[0]?.name ?? null },
+        meses,
+      });
+    } else {
+      const data = await this.checkup360(clientId);
+      c = data.client;
+      const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+      const header: [string, string][] = [['Empresa', data.client.legalName], ['CNPJ/CPF', formatDocument(data.client.document)], ['Regime', data.client.regime]];
+      const lines: (string | [string, string])[] = [
         ...header, '',
         ['Guias em aberto', String(data.guias.filter((g) => g.status !== 'PAGA').length)],
         ['Declarações ausentes', String(data.declaracoes.filter((d) => d.status === 'AUSENTE').length)],
@@ -258,10 +301,8 @@ export class ClientsService {
         '', 'Últimas guias',
         ...data.guias.slice(0, 12).map((g) => [`${g.type} ${g.competence}`, `${brl(Number(g.total))} · ${g.status}`] as [string, string]),
       ];
+      raw = await simplePdf(`${title} — ${tenant.name}`, lines, `Emitido em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Maceio' })} · assinado digitalmente por ${tenant.name}`, { logo });
     }
-    const title = kind === 'faturamento' ? 'Relação de Faturamento' : 'Checkup 360';
-    const logo = tenant.logoKey ? await this.storage.get(tenant.logoKey).catch(() => null) : null;
-    const raw = await simplePdf(`${title} — ${tenant.name}`, lines, `Emitido em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Maceio' })} · assinado digitalmente por ${tenant.name}`, { logo });
 
     // Assinatura PAdES com o certificado A1 do escritório
     let cert: { pfx: Buffer; passphrase: string };
@@ -351,7 +392,7 @@ export class ClientsController {
   async refreshCnpj(@Param('id') id: string) {
     const c = await this.prisma.clientCompany.findFirstOrThrow({ where: { id } });
     const d = await this.cnpj.lookup(c.document);
-    return this.prisma.clientCompany.update({ where: { id }, data: { legalName: d.legalName, tradeName: d.tradeName, legalNature: d.legalNature, cnae: d.cnae, uf: d.uf, city: d.city, ibgeCity: d.ibgeCity, partners: d.partners as any, rawCnpjData: d.raw as any } });
+    return this.prisma.clientCompany.update({ where: { id }, data: { legalName: d.legalName, tradeName: d.tradeName, legalNature: d.legalNature, cnae: d.cnae, uf: d.uf, city: d.city, ibgeCity: d.ibgeCity, street: d.street, district: d.district, zipCode: d.zipCode, legalRepName: c.legalRepName ?? d.partners[0]?.name, partners: d.partners as any, rawCnpjData: d.raw as any } });
   }
 
   // ----- Contatos e responsáveis -----
@@ -404,8 +445,8 @@ export class ClientsController {
   }
 
   @Get(':id/pdf/:kind')
-  async pdf(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('kind') kind: 'checkup' | 'faturamento', @Res() res: Response) {
-    const { fileName, pdf } = await this.clients.signedPdf(u.tenantId, id, kind === 'faturamento' ? 'faturamento' : 'checkup');
+  async pdf(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('kind') kind: 'checkup' | 'faturamento', @Res() res: Response, @Query('ate') ate?: string) {
+    const { fileName, pdf } = await this.clients.signedPdf(u.tenantId, id, kind === 'faturamento' ? 'faturamento' : 'checkup', ate);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     res.send(pdf);

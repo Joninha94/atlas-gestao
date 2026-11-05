@@ -243,6 +243,18 @@ model Tenant {
   cnpj          String   @unique
   plan          Plan     @default(ESSENCIAL)
   logoKey       String?
+  // Papel timbrado e declarações (Relação de Faturamento etc.)
+  legalName     String?  // razão social completa (ex.: PRODUTIVA CONTABILIDADE E ASSESSORIA LTDA)
+  street        String?  // logradouro, número e complemento
+  district      String?
+  city          String?
+  uf            String?
+  zipCode       String?
+  phone         String?
+  website       String?
+  accountantName String? // contador responsável que assina as declarações
+  accountantCrc  String?
+  accountantCpf  String?
   // Parametrização de disparo
   smtpHost      String?
   smtpPort      Int?
@@ -370,6 +382,10 @@ model ClientCompany {
   city             String?
   ibgeCity         String?    // código IBGE do município (NFS-e)
   stateRegistration String?   // inscrição estadual
+  street           String?    // logradouro, número e complemento
+  district         String?
+  zipCode          String?
+  legalRepName     String?    // sócio/representante que assina declarações (padrão: 1º sócio do QSA)
   municipalRegistration String? // inscrição municipal
   openedAt         DateTime?
   partners         Json?      // QSA

@@ -57,9 +57,9 @@ espera http://localhost:3333/health "a API" 200 || falhou "A API não respondeu 
 espera http://localhost:3000/login "o painel" 60 || falhou "O painel (porta 3000) não respondeu."
 espera http://localhost:8081/ "o app do cliente" 40 || echo "⚠️  O app do cliente (8081) ainda não respondeu; o painel já pode ser usado."
 
-if [ "${1:-}" = "--demo" ] && [ ! -f .demo-carregada ]; then
-  echo "🧪 Carregando base de demonstração (só na primeira vez)..."
-  if $C --profile demo run --rm demo; then touch .demo-carregada; else echo "⚠️  Demonstração falhou (o sistema continua funcionando)."; fi
+if [ "${1:-}" = "--demo" ]; then
+  echo "🧪 Conferindo base de demonstração e logo (não duplica nada)..."
+  $C --profile demo run --rm demo || echo "⚠️  Demonstração falhou (o sistema continua funcionando)."
 fi
 
 cat <<MSG

@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Activity, Copy, HardDriveDownload, KeyRound, Mail, RotateCcw, ShieldCheck } from 'lucide-react';
 import { apiDelete, apiPost, apiPut, uploadFiles } from '../../lib/api';
-import { useAction, useApi } from '../../lib/hooks';
+import { toast, useAction, useApi } from '../../lib/hooks';
 import { date, dateTime, doc, label } from '../../lib/format';
 import { Badge, Button, Card, Field, Loading, Modal, PageHeader, Select, Stat, Table, Tabs } from '../../components/ui';
 
@@ -39,9 +39,16 @@ function Escritorio() {
   const { data, reload } = useApi<any>('/settings');
   const [f, setF] = useState<any>(null);
   const [testTo, setTestTo] = useState('');
+  const [o, setO] = useState<any>(null);
+  useEffect(() => { if (data && !o) setO({ cnpj: doc(data.cnpj), ...Object.fromEntries(Object.entries(data.office ?? {}).map(([k, v]) => [k, k === 'zipCode' && v ? String(v).replace(/^(\d{5})(\d{3})$/, '$1-$2') : v ?? ''])) }); }, [data, o]);
   const { busy, run } = useAction();
   useEffect(() => { if (data && !f) setF({ name: data.name, smtpHost: data.smtpHost ?? '', smtpPort: data.smtpPort ?? 587, smtpUser: data.smtpUser ?? '', smtpPass: '', emailFrom: data.emailFrom ?? '', emailSignature: data.emailSignature ?? '', whatsappPhoneId: data.whatsappPhoneId ?? '', whatsappToken: '' }); }, [data, f]);
-  if (!data || !f) return <Loading />;
+  if (!data || !f || !o) return <Loading />;
+  const saveOffice = () => run(async () => {
+    const r = await apiPut('/settings/office', { ...o, name: f.name });
+    if (r.cnpj !== data.cnpj) toast('CNPJ do escritório alterado: use o novo CNPJ no próximo login.');
+    reload();
+  }, 'Dados do escritório salvos.');
   const save = () => run(() => apiPut('/settings/dispatch', { ...f, smtpPort: Number(f.smtpPort) || undefined, smtpPass: f.smtpPass || undefined, whatsappToken: f.whatsappToken || undefined, emailFrom: f.emailFrom || undefined }).then(reload), 'Configurações salvas.');
   return (
     <div className="space-y-4">
@@ -49,9 +56,8 @@ function Escritorio() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Escritório">
           <div className="space-y-3">
-            <Field label="Nome do escritório"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-            <Field label="CNPJ"><input className="input" value={doc(data.cnpj)} disabled /></Field>
-            <Field label="Plano"><input className="input" value={data.plan} disabled /></Field>
+            <Field label="Nome do escritório (curto)"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+            <Plano plan={data.plan} />
             <div>
               <span className="label">Logo do escritório</span>
               <div className="flex items-center gap-4 rounded-md border border-dashed border-slate-300 p-3">
@@ -75,6 +81,30 @@ function Escritorio() {
               <span className="mt-1 block text-xs text-ink-muted">PNG ou JPG, até 2 MB (de preferência com fundo transparente). Aparece no menu do painel, no app do cliente e nos PDFs (Checkup 360 e faturamento).</span>
             </div>
             <div className="text-xs text-ink-muted">IA: {data.aiEnabled ? 'ligada' : 'desligada (configure ANTHROPIC_API_KEY no servidor; até lá usa regras simples)'}</div>
+          </div>
+        </Card>
+        <Card title="Papel timbrado e declarações" actions={<Button size="sm" disabled={busy} onClick={saveOffice}>Salvar</Button>}>
+          <div className="space-y-3">
+            <p className="text-xs text-ink-muted">Estes dados aparecem no cabeçalho/rodapé do papel timbrado e no bloco do escritório da Relação de Faturamento.</p>
+            <div className="grid grid-cols-6 gap-3">
+              <div className="col-span-6"><Field label="Razão social"><input className="input" value={o.legalName} onChange={(e) => setO({ ...o, legalName: e.target.value })} placeholder="PRODUTIVA CONTABILIDADE E ASSESSORIA LTDA" /></Field></div>
+              <div className="col-span-3"><Field label="CNPJ do escritório" hint="É também o CNPJ usado para entrar no sistema."><input className="input" value={o.cnpj} onChange={(e) => setO({ ...o, cnpj: e.target.value })} /></Field></div>
+              <div className="col-span-3"><Field label="Telefones"><input className="input" value={o.phone} onChange={(e) => setO({ ...o, phone: e.target.value })} placeholder="(82) 3185.8315 | 99602.0966" /></Field></div>
+              <div className="col-span-6"><Field label="Endereço (logradouro, número, sala)"><input className="input" value={o.street} onChange={(e) => setO({ ...o, street: e.target.value })} /></Field></div>
+              <div className="col-span-3"><Field label="Bairro"><input className="input" value={o.district} onChange={(e) => setO({ ...o, district: e.target.value })} /></Field></div>
+              <div className="col-span-3"><Field label="CEP"><input className="input" value={o.zipCode} onChange={(e) => setO({ ...o, zipCode: e.target.value })} /></Field></div>
+              <div className="col-span-4"><Field label="Cidade"><input className="input" value={o.city} onChange={(e) => setO({ ...o, city: e.target.value })} /></Field></div>
+              <div className="col-span-2"><Field label="UF"><input className="input" maxLength={2} value={o.uf} onChange={(e) => setO({ ...o, uf: e.target.value.toUpperCase() })} /></Field></div>
+              <div className="col-span-6"><Field label="Site"><input className="input" value={o.website} onChange={(e) => setO({ ...o, website: e.target.value })} placeholder="www.produtivacontabilidade.com.br" /></Field></div>
+            </div>
+            <div className="rounded-md border border-slate-200 p-3">
+              <div className="mb-2 text-xs font-semibold uppercase text-ink-muted">Contador responsável (assina as declarações)</div>
+              <div className="grid grid-cols-6 gap-3">
+                <div className="col-span-6"><Field label="Nome completo"><input className="input" value={o.accountantName} onChange={(e) => setO({ ...o, accountantName: e.target.value })} /></Field></div>
+                <div className="col-span-3"><Field label="CRC"><input className="input" value={o.accountantCrc} onChange={(e) => setO({ ...o, accountantCrc: e.target.value })} placeholder="AL-000000/O-0" /></Field></div>
+                <div className="col-span-3"><Field label="CPF"><input className="input" value={o.accountantCpf} onChange={(e) => setO({ ...o, accountantCpf: e.target.value })} /></Field></div>
+              </div>
+            </div>
           </div>
         </Card>
         <Card title="E-mail de disparo (SMTP)">
@@ -369,4 +399,8 @@ function Saude() {
       </Card>
     </div>
   );
+}
+
+function Plano({ plan }: { plan: string }) {
+  return <Field label="Plano"><input className="input" value={plan} disabled /></Field>;
 }

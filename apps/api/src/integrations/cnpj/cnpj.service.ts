@@ -11,6 +11,9 @@ export interface CnpjData {
   uf?: string;
   city?: string;
   ibgeCity?: string;
+  street?: string;   // logradouro, número e complemento
+  district?: string;
+  zipCode?: string;
   openedAt?: string;
   partners: { name: string; role: string }[];
   simplesOptant?: boolean;
@@ -42,6 +45,9 @@ export class CnpjService {
         uf: CITIES[n % CITIES.length].uf,
         city: CITIES[n % CITIES.length].city,
         ibgeCity: CITIES[n % CITIES.length].ibge,
+        street: `RUA EXEMPLO, ${(n % 900) + 10}`,
+        district: 'CENTRO',
+        zipCode: '57000000',
         openedAt: '2019-03-12',
         partners: [{ name: 'Sócio Administrador', role: '49-Sócio-Administrador' }],
         raw: { sandbox: true },
@@ -58,6 +64,9 @@ export class CnpjService {
       uf: d.uf,
       city: d.municipio,
       ibgeCity: d.codigo_municipio_ibge ? String(d.codigo_municipio_ibge) : undefined,
+      street: [[d.descricao_tipo_de_logradouro, d.logradouro].filter(Boolean).join(' '), d.numero, d.complemento].filter((x) => x && String(x).trim()).join(', ') || undefined,
+      district: d.bairro || undefined,
+      zipCode: d.cep ? String(d.cep).replace(/\D/g, '') : undefined,
       openedAt: d.data_inicio_atividade,
       partners: (d.qsa ?? []).map((p: any) => ({ name: p.nome_socio, role: p.qualificacao_socio })),
       simplesOptant: d.opcao_pelo_simples ?? undefined,

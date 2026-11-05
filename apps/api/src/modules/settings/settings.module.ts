@@ -1,5 +1,6 @@
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Module, Param, Post, Put, Query } from '@nestjs/common';
 import { z } from 'zod';
+import { isValidCnpj, isValidCpf } from '@produtiva/core';
 import { AuthUser, CurrentUser, PERMISSIONS, Public, RequirePermission } from '../../common/auth';
 import { PrismaService, SystemPrismaService } from '../../common/prisma.service';
 import { VaultService } from '../../common/vault.service';
@@ -26,6 +27,22 @@ const DispatchSettingsSchema = z.object({
   whatsappToken: z.string().optional(),
 });
 
+const OfficeSchema = z.object({
+  name: z.string().min(2).max(120),
+  legalName: z.string().max(200).nullish(),
+  cnpj: z.string().transform((v) => v.replace(/\D/g, '')).refine((v) => isValidCnpj(v), 'CNPJ inválido.'),
+  street: z.string().max(200).nullish(),
+  district: z.string().max(100).nullish(),
+  city: z.string().max(100).nullish(),
+  uf: z.string().max(2).transform((v) => v.toUpperCase()).nullish(),
+  zipCode: z.string().transform((v) => v.replace(/\D/g, '')).nullish(),
+  phone: z.string().max(100).nullish(),
+  website: z.string().max(150).nullish(),
+  accountantName: z.string().max(150).nullish(),
+  accountantCrc: z.string().max(40).nullish(),
+  accountantCpf: z.string().transform((v) => v.replace(/\D/g, '')).refine((v) => !v || isValidCpf(v), 'CPF do contador inválido.').nullish(),
+});
+
 @Controller()
 export class SettingsController {
   constructor(
@@ -36,6 +53,7 @@ export class SettingsController {
     private readonly notifications: NotificationsService,
     private readonly storage: StorageService,
     private readonly ai: AiGatewayService,
+    private readonly sys: SystemPrismaService,
   ) {}
 
   @Public()
@@ -54,6 +72,10 @@ export class SettingsController {
       emailFrom: t.emailFrom, emailSignature: t.emailSignature,
       whatsappPhoneId: t.whatsappPhoneId, whatsappConfigured: !!t.whatsappTokenEnc,
       logoUrl: t.logoKey ? await this.storage.signedUrl(t.logoKey, 3600) : null,
+      office: {
+        legalName: t.legalName, street: t.street, district: t.district, city: t.city, uf: t.uf, zipCode: t.zipCode,
+        phone: t.phone, website: t.website, accountantName: t.accountantName, accountantCrc: t.accountantCrc, accountantCpf: t.accountantCpf,
+      },
       certificate: cert, sandbox: isSandbox(), aiEnabled: this.ai.enabled,
     };
   }
@@ -73,6 +95,18 @@ export class SettingsController {
       },
       select: { id: true, name: true, smtpHost: true, emailFrom: true, whatsappPhoneId: true },
     });
+  }
+
+  /** Dados do escritório usados no papel timbrado e nas declarações (Relação de Faturamento). */
+  @Put('settings/office')
+  @RequirePermission(PERMISSIONS.SETTINGS)
+  async saveOffice(@CurrentUser() u: AuthUser, @Body() body: unknown) {
+    const d = OfficeSchema.parse(body);
+    const clash = await this.sys.tenant.findUnique({ where: { cnpj: d.cnpj }, select: { id: true } });
+    if (clash && clash.id !== u.tenantId) throw new BadRequestException('Este CNPJ já está em uso por outro escritório.');
+    const t = await this.prisma.tenant.update({ where: { id: u.tenantId }, data: { ...d, legalName: d.legalName || null } });
+    await this.prisma.auditLog.create({ data: { tenantId: u.tenantId, userId: u.sub, action: 'escritorio.dados', entity: 'Tenant', entityId: u.tenantId } });
+    return { ok: true, cnpj: t.cnpj };
   }
 
   /** Logo do escritório: PNG ou JPG até 2 MB (aparece no painel, no app do cliente e nos PDFs). */

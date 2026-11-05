@@ -16,6 +16,7 @@ export default function ClienteDetalhe() {
   const [tab, setTab] = useState<Tab>('checkup');
   const { data: c, reload } = useApi<any>(`/clients/${id}`);
   const { busy, run } = useAction();
+  const [fat, setFat] = useState<string | null>(null);
   if (!c) return <Loading />;
   return (
     <div>
@@ -25,9 +26,14 @@ export default function ClienteDetalhe() {
         actions={<>
           <Button variant="secondary" disabled={busy} onClick={() => run(() => apiPost(`/clients/${id}/power-of-attorney/check`).then(reload), 'Procuração verificada no e-CAC.')}><ShieldCheck size={14} /> Verificar procuração</Button>
           <Button variant="secondary" disabled={busy} onClick={() => run(() => download(`/clients/${id}/pdf/checkup`, `checkup_${c.document}.pdf`))}><FileSignature size={14} /> PDF Checkup 360</Button>
-          <Button disabled={busy} onClick={() => run(() => download(`/clients/${id}/pdf/faturamento`, `faturamento_${c.document}.pdf`), 'PDF assinado digitalmente pelo escritório.')}><FileSignature size={14} /> Faturamento 12 meses (assinado)</Button>
+          <Button disabled={busy} onClick={() => setFat(ultimaCompetencia())}><FileSignature size={14} /> Relação de faturamento</Button>
         </>}
       />
+      <Modal open={fat !== null} title="Relação de Faturamento" onClose={() => setFat(null)} footer={<Button disabled={busy || !fat} onClick={() => run(async () => { await download(`/clients/${id}/pdf/faturamento?ate=${fat}`, `relacao_faturamento_${c.document}_${fat}.pdf`); setFat(null); }, 'PDF no papel timbrado, assinado digitalmente pelo escritório.')}><FileSignature size={14} /> Gerar PDF assinado</Button>}>
+        <p className="text-sm text-ink-soft">Declaração no papel timbrado do escritório com os 12 meses de faturamento (PGDAS-D ou, sem ele, notas de saída e serviços), assinatura do contador responsável e do representante da empresa.</p>
+        <Field label="Último mês do período" hint={fat ? `Período: ${periodo(fat)}` : undefined}><input type="month" className="input w-48" value={fat ?? ''} onChange={(e) => setFat(e.target.value)} /></Field>
+        <p className="text-xs text-ink-muted">Confira antes: endereço e representante em <b>Dados cadastrais</b>; contador responsável e dados do escritório em <b>Configurações → Escritório</b>.</p>
+      </Modal>
       <Tabs value={tab} onChange={setTab} tabs={[{ id: 'checkup', label: 'Checkup 360' }, { id: 'dados', label: 'Dados cadastrais' }, { id: 'contatos', label: 'Contatos e responsáveis' }, { id: 'obrigacoes', label: 'Obrigações' }, { id: 'certificado', label: 'Certificado e procuração' }, { id: 'app', label: 'Aplicativo' }, { id: 'historico', label: 'Histórico' }]} />
       {tab === 'checkup' && <Checkup id={id} />}
       {tab === 'dados' && <Dados c={c} reload={reload} />}
@@ -80,7 +86,7 @@ function Checkup({ id }: { id: string }) {
 }
 
 function Dados({ c, reload }: { c: any; reload: () => void }) {
-  const [form, setForm] = useState({ regime: c.regime, tradeName: c.tradeName ?? '', stateRegistration: c.stateRegistration ?? '', municipalRegistration: c.municipalRegistration ?? '', notes: c.notes ?? '', active: c.active });
+  const [form, setForm] = useState({ regime: c.regime, tradeName: c.tradeName ?? '', stateRegistration: c.stateRegistration ?? '', municipalRegistration: c.municipalRegistration ?? '', notes: c.notes ?? '', active: c.active, street: c.street ?? '', district: c.district ?? '', city: c.city ?? '', uf: c.uf ?? '', zipCode: c.zipCode ?? '', legalRepName: c.legalRepName ?? (Array.isArray(c.partners) ? c.partners[0]?.name ?? '' : '') });
   const { busy, run } = useAction();
   const partners: any[] = Array.isArray(c.partners) ? c.partners : [];
   return (
@@ -104,9 +110,23 @@ function Dados({ c, reload }: { c: any; reload: () => void }) {
             <Field label="Inscrição estadual"><input className="input" value={form.stateRegistration} onChange={(e) => setForm({ ...form, stateRegistration: e.target.value })} /></Field>
             <Field label="Inscrição municipal"><input className="input" value={form.municipalRegistration} onChange={(e) => setForm({ ...form, municipalRegistration: e.target.value })} /></Field>
           </div>
+          <div className="rounded-md border border-slate-200 p-3">
+            <div className="mb-2 text-xs font-semibold uppercase text-ink-muted">Endereço (sai nas declarações)</div>
+            <div className="grid grid-cols-6 gap-3">
+              <div className="col-span-6"><Field label="Logradouro, número e complemento"><input className="input" value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} /></Field></div>
+              <div className="col-span-3"><Field label="Bairro"><input className="input" value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} /></Field></div>
+              <div className="col-span-3"><Field label="CEP"><input className="input" value={form.zipCode} onChange={(e) => setForm({ ...form, zipCode: e.target.value })} placeholder="00000-000" /></Field></div>
+              <div className="col-span-4"><Field label="Cidade"><input className="input" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field></div>
+              <div className="col-span-2"><Field label="UF"><input className="input" maxLength={2} value={form.uf} onChange={(e) => setForm({ ...form, uf: e.target.value.toUpperCase() })} /></Field></div>
+            </div>
+          </div>
+          <Field label="Representante que assina as declarações" hint="Padrão: primeiro sócio do quadro societário.">
+            <input className="input" list={`socios-${c.id}`} value={form.legalRepName} onChange={(e) => setForm({ ...form, legalRepName: e.target.value })} />
+            <datalist id={`socios-${c.id}`}>{partners.map((p, i) => <option key={i} value={p.name} />)}</datalist>
+          </Field>
           <Field label="Observações"><textarea className="input" rows={4} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} /> Cliente ativo</label>
-          <Button disabled={busy} onClick={() => run(() => apiPut(`/clients/${c.id}`, form).then(reload), 'Salvo.')}>Salvar</Button>
+          <Button disabled={busy} onClick={() => run(() => apiPut(`/clients/${c.id}`, { ...form, uf: form.uf || undefined }).then(reload), 'Salvo.')}>Salvar</Button>
         </div>
       </Card>
     </div>
@@ -312,4 +332,15 @@ function Obrigacoes({ id }: { id: string }) {
       </Card>
     </div>
   );
+}
+
+function ultimaCompetencia() {
+  const d = new Date();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+}
+function periodo(fim: string) {
+  const [y, m] = fim.split('-').map(Number);
+  const ini = new Date(Date.UTC(y, m - 12, 1)).toISOString().slice(0, 7);
+  const f = (v: string) => `${v.slice(5)}/${v.slice(0, 4)}`;
+  return `${f(ini)} a ${f(fim)}`;
 }

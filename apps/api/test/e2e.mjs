@@ -549,6 +549,21 @@ await step('logo do escritório: recusa arquivo que não é imagem, aparece no p
   assert.equal((await get('/settings/branding')).logoUrl, null);
 });
 
+await step('papel timbrado: dados do escritório validados e Relação de Faturamento com período escolhido', async () => {
+  const st = await get('/settings');
+  await assert.rejects(put('/settings/office', { name: st.name, cnpj: '11111111111111' }), /400/);
+  await assert.rejects(put('/settings/office', { name: st.name, cnpj: OFFICE, accountantCpf: '12345678900' }), /400/);
+  await put('/settings/office', { name: st.name, cnpj: OFFICE, legalName: 'ESCRITÓRIO TESTE LTDA', city: 'Maceió', uf: 'AL', accountantName: 'Contador Teste', accountantCrc: 'AL-123/O', accountantCpf: '52998224725' });
+  assert.equal((await get('/settings')).office.accountantCrc, 'AL-123/O');
+  await put(`/clients/${ctx.clientId}`, { street: 'Rua das Flores, 10', district: 'Centro', zipCode: '57000-000', legalRepName: 'Maria Sócia' });
+  const r = await call('GET', `/clients/${ctx.clientId}/pdf/faturamento?ate=2026-03`, undefined, token, true);
+  assert.equal(r.status, 200);
+  const pdf = Buffer.from(await r.arrayBuffer());
+  assert.ok(pdf.includes('/ByteRange'), 'PDF assinado (PAdES)');
+  // devolve os dados do escritório como estavam
+  await put('/settings/office', { name: st.name, cnpj: st.cnpj, ...Object.fromEntries(Object.entries(st.office).map(([k, v]) => [k, v ?? null])) });
+});
+
 await step('agente local: token, exportar agora, entrega na pasta de importação, revogação', async () => {
   const { spawnSync } = await import('node:child_process');
   const fs = await import('node:fs');

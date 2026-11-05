@@ -44,6 +44,17 @@ async function main() {
     update: {},
   });
 
+  // Papel timbrado: preenche só o que ainda estiver vazio (editável em Configurações → Escritório)
+  const timbrado = {
+    legalName: 'PRODUTIVA CONTABILIDADE E ASSESSORIA LTDA',
+    street: 'Av. Menino Marcelo, Nº 9350, Sala 1420 - Edif. Humberto Lobo',
+    city: 'Maceió', uf: 'AL', zipCode: '57050000',
+    phone: '(82) 3185.8315 | 99602.0966',
+    website: 'www.produtivacontabilidade.com.br',
+  };
+  const vazio = Object.fromEntries(Object.entries(timbrado).filter(([k]) => (tenant as Record<string, unknown>)[k] == null));
+  if (Object.keys(vazio).length) await prisma.tenant.update({ where: { id: tenant.id }, data: vazio });
+
   const deptNames = ['Fiscal', 'Contábil', 'Pessoal', 'Societário', 'Financeiro'];
   const depts: Record<string, string> = {};
   for (const [i, name] of deptNames.entries()) {
