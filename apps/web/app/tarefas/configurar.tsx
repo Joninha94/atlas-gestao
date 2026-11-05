@@ -70,9 +70,9 @@ export function Configurar({ onOpenTab }: { onOpenTab: (tab: string) => void }) 
       { label: 'Geração de tarefas', sec: 'geracao' },
     ] },
     { title: 'Tarefas recorrentes', icon: <Repeat size={18} />, items: [
-      { label: 'Gerenciar', sec: 'recorrentes', count: s?.recurring },
+      { label: 'Gerenciar (modelos de obrigações)', tab: 'modelos', count: s?.recurring },
       { label: 'POPs (checklists)', sec: 'pops', count: s?.pops },
-      { label: 'Editar modelos', tab: 'modelos' },
+      { label: 'Vínculo rápido de POPs', sec: 'recorrentes' },
     ] },
     { title: 'Tarefas de solicitações de serviço', icon: <Inbox size={18} />, items: [
       { label: 'Gerenciar', sec: 'avulsos', count: s?.avulsos },

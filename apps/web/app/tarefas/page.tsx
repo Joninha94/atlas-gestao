@@ -181,7 +181,10 @@ function Templates() {
   const { data, reload } = useApi<any[]>('/tasks/templates');
   const { data: deps } = useApi<any[]>('/departments');
   const { data: clients } = useApi<any[]>('/clients');
+  const { data: pops, reload: reloadPops } = useApi<any[]>('/tasks/config/pops');
+  const { data: groups } = useApi<any[]>('/tasks/config/task-groups');
   const [edit, setEdit] = useState<any>(null);
+  const [popDraft, setPopDraft] = useState<{ id?: string; title: string; items: { id?: string; text: string }[]; dirty: boolean } | null>(null);
   const [ai, setAi] = useState<string | null>(null);
   const [apply, setApply] = useState<any>(null);
   const [q, setQ] = useState('');
@@ -189,23 +192,41 @@ function Templates() {
   const [cat, setCat] = useState('');
   const cats = [...new Set((data ?? []).map((t) => t.category ?? 'Outras'))].sort();
   const list = (data ?? []).filter((t) => (!q || t.name.toLowerCase().includes(q.toLowerCase())) && (!cat || (t.category ?? 'Outras') === cat)).sort((a, b) => (a.category ?? '').localeCompare(b.category ?? '') || a.name.localeCompare(b.name));
+  const openEdit = (t: any) => {
+    setEdit({ ...t, departmentId: t.departmentId ?? '', monitorLink: t.monitorLink ?? '', notes: t.notes ?? '', category: t.category ?? '', popId: t.popId ?? '', groupId: t.groupId ?? '', applyPopToOpen: true,
+      steps: [...t.steps].sort((a: any, b: any) => a.order - b.order).map(({ id, templateId, ...s }: any) => ({ ...s, documentHint: s.documentHint ?? undefined })) });
+    const pop = (pops ?? []).find((x) => x.id === t.popId);
+    setPopDraft(pop ? { id: pop.id, title: pop.title, items: pop.items, dirty: false } : null);
+  };
   const save = () => run(async () => {
-    const body = { ...edit, departmentId: edit.departmentId || undefined, monitorLink: edit.monitorLink || undefined, recurrenceMonth: edit.recurrence === 'ANUAL' ? edit.recurrenceMonth : undefined, steps: edit.steps.map((s: any, i: number) => ({ ...s, order: i + 1 })) };
-    delete body.id; delete body.tenantId; delete body.createdByAi; delete body.estimatedHours; delete body.targetDay; delete body.deadlineMode; delete body.deadline;
-    body.dueBusinessDay = body.dueBusinessDay || null; body.notes = body.notes || null;
-    if (edit.id) await apiPut(`/tasks/templates/${edit.id}`, body); else await apiPost('/tasks/templates', body);
-    setEdit(null); reload();
-  }, 'Modelo salvo.');
+    // 1) POP: cria o novo ou salva os itens alterados (POP padrão vira versão do escritório)
+    let popId: string | null = edit.popId || null;
+    if (popDraft && (popDraft.dirty || !popDraft.id)) {
+      const items = popDraft.items.filter((i) => i.text.trim());
+      if (items.length) {
+        const body = { title: popDraft.title || `POP — ${edit.name}`, items, active: true };
+        const saved = popDraft.id ? await apiPut<any>(`/tasks/config/pops/${popDraft.id}`, body) : await apiPost<any>('/tasks/config/pops', body);
+        popId = saved.id;
+      }
+    }
+    // 2) Modelo + vínculos
+    const body: any = { ...edit, popId, groupId: edit.groupId || null, departmentId: edit.departmentId || undefined, monitorLink: edit.monitorLink || undefined, recurrenceMonth: edit.recurrence === 'ANUAL' ? edit.recurrenceMonth : undefined, steps: edit.steps.map((s: any, i: number) => ({ ...s, order: i + 1 })) };
+    for (const k of ['id', 'tenantId', 'createdByAi', 'estimatedHours', 'targetDay', 'deadlineMode', 'deadline', 'popTitle', 'popItems', 'openProcesses', 'createdAt', 'updatedAt']) delete body[k];
+    body.dueBusinessDay = body.dueBusinessDay || null; body.notes = body.notes || null; body.category = body.category || null;
+    const r = edit.id ? await apiPut<any>(`/tasks/templates/${edit.id}`, body) : await apiPost<any>('/tasks/templates', body);
+    setEdit(null); setPopDraft(null); reload(); reloadPops();
+    return r;
+  }, edit?.id && !edit?.tenantId ? 'Modelo salvo como versão do escritório.' : 'Modelo salvo.');
 
   return (
     <Card pad={false} title={`Modelos de obrigações (${data?.length ?? 0})`} actions={<>
       <Select value={cat} onChange={setCat} placeholder="Todas as categorias" options={cats.map((c) => ({ value: c, label: c }))} />
       <input className="input w-48" placeholder="Buscar modelo" value={q} onChange={(e) => setQ(e.target.value)} />
       <Button variant="secondary" size="sm" onClick={() => setAi('')}><Wand2 size={14} /> Criar com IA</Button>
-      <Button size="sm" onClick={() => setEdit(structuredClone(EMPTY_TPL))}>Novo modelo</Button>
+      <Button size="sm" onClick={() => { setEdit({ ...structuredClone(EMPTY_TPL), popId: '', groupId: '', notifyClient: true, applyPopToOpen: true }); setPopDraft(null); }}>Novo modelo</Button>
     </>}>
       {!data ? <Loading /> : (
-        <Table head={['Modelo', 'Categoria', 'Regimes', 'Recorrência', 'Prazo', 'Etapas', '']}>
+        <Table head={['Modelo', 'Categoria', 'Regimes', 'Recorrência', 'Prazo', 'Etapas', 'POP', '']}>
           {list.map((t) => (
             <tr key={t.id}>
               <td className="td font-medium">{t.name} {!t.tenantId && <Badge>padrão</Badge>} {t.monitorLink && <Badge tone="violet">Monitor</Badge>} {t.generatesFine && <Badge tone="red">multa</Badge>} {t.optIn && <Badge tone="amber">opcional</Badge>} {t.ufs?.length > 0 && <Badge tone="blue">{t.ufs.join(', ')}</Badge>}
@@ -215,10 +236,11 @@ function Templates() {
               <td className="td">{t.recurrence.toLowerCase()}</td>
               <td className="td text-xs">{t.deadline}</td>
               <td className="td">{t.steps.length}{t.cascade && ' (cascata)'}</td>
+              <td className="td max-w-[12rem]">{t.popId ? <span className="inline-flex items-center gap-1 text-xs text-emerald-700" title={t.popTitle}><ClipboardCheck size={13} /><span className="truncate">{t.popItems.length} itens</span></span> : <span className="text-xs text-ink-muted">—</span>}</td>
               <td className="td whitespace-nowrap text-right">
+                <Button variant="secondary" size="sm" onClick={() => openEdit(t)}>Editar</Button>
+                <Button variant="ghost" size="sm" title="Criar outro modelo a partir deste" onClick={() => run(() => apiPost(`/tasks/templates/${t.id}/duplicate`).then(reload), 'Cópia criada: edite o nome e as etapas.')}><Copy size={13} /></Button>
                 <Button variant="ghost" size="sm" onClick={() => setApply({ t, clientId: '', competence: lastCompetence() })}>Vincular cliente</Button>
-                {t.tenantId ? <Button variant="ghost" size="sm" onClick={() => setEdit({ ...t, departmentId: t.departmentId ?? '', monitorLink: t.monitorLink ?? '', notes: t.notes ?? '', steps: t.steps.sort((a: any, b: any) => a.order - b.order).map(({ id, templateId, ...s }: any) => s) })}>Editar</Button>
-                  : <Button variant="ghost" size="sm" onClick={() => run(() => apiPost(`/tasks/templates/${t.id}/duplicate`).then(reload), 'Modelo duplicado para personalizar.')}><Copy size={13} /> Duplicar</Button>}
               </td>
             </tr>
           ))}
@@ -229,8 +251,9 @@ function Templates() {
         <Field label="Descreva o processo" hint="Ex.: rescisão por justa causa; abertura de filial; alteração de endereço"><textarea className="input" rows={3} value={ai ?? ''} onChange={(e) => setAi(e.target.value)} /></Field>
       </Modal>
 
-      <Modal wide open={!!edit} title={edit?.id ? 'Editar modelo' : 'Novo modelo'} onClose={() => setEdit(null)} footer={<Button disabled={busy || !edit?.name || edit?.steps.some((s: any) => !s.title)} onClick={save}>Salvar modelo</Button>}>
+      <Modal wide open={!!edit} title={edit?.id ? `Editar modelo${edit?.tenantId ? '' : ' padrão'}` : 'Novo modelo'} onClose={() => { setEdit(null); setPopDraft(null); }} footer={<Button disabled={busy || !edit?.name || edit?.steps.some((s: any) => !s.title)} onClick={save}>Salvar modelo</Button>}>
         {edit && <>
+          {edit.id && !edit.tenantId && <p className="rounded bg-blue-50 p-2 text-xs text-blue-900">Este é um modelo padrão do sistema. Ao salvar, ele vira a <b>versão do escritório</b> (substitui o padrão para os seus clientes, inclusive nas tarefas já geradas). Excluir a versão do escritório volta ao padrão.</p>}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Nome"><input className="input" value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
             <Field label="Categoria"><input className="input" value={edit.category ?? ''} onChange={(e) => setEdit({ ...edit, category: e.target.value })} /></Field>
@@ -260,6 +283,47 @@ function Templates() {
             </div>
           </div>
           <Field label="Base legal e observações para o time"><textarea className="input" rows={2} value={edit.notes ?? ''} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></Field>
+          <section className="rounded-md border border-amber-200 bg-amber-50/40 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <ClipboardCheck size={16} className="text-amber-600" />
+              <span className="flex-1 text-sm font-semibold">POP — como fazer esta tarefa</span>
+              <select className="input w-72 py-1 text-sm" value={popDraft && !popDraft.id ? '__novo' : edit.popId} onChange={(e) => {
+                const v = e.target.value;
+                if (v === '__novo') { setPopDraft({ title: `POP — ${edit.name || 'novo'}`, items: [{ text: '' }], dirty: true }); setEdit({ ...edit, popId: '' }); return; }
+                const pop = (pops ?? []).find((x) => x.id === v);
+                setEdit({ ...edit, popId: v });
+                setPopDraft(pop ? { id: pop.id, title: pop.title, items: pop.items, dirty: false } : null);
+              }} aria-label="POP do modelo">
+                <option value="">Sem POP</option>
+                {(pops ?? []).filter((x) => x.active).map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
+                <option value="__novo">+ Criar POP novo…</option>
+              </select>
+            </div>
+            {popDraft ? (
+              <div className="space-y-1.5">
+                <input className="input text-sm" value={popDraft.title} onChange={(e) => setPopDraft({ ...popDraft, title: e.target.value, dirty: true })} aria-label="Nome do POP" />
+                {popDraft.items.map((it, i) => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <span className="w-5 text-right text-xs text-ink-muted">{i + 1}.</span>
+                    <input className="input flex-1 py-1.5 text-sm" value={it.text} placeholder="Item a conferir" onChange={(e) => setPopDraft({ ...popDraft, dirty: true, items: popDraft.items.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) })}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setPopDraft({ ...popDraft, dirty: true, items: [...popDraft.items.slice(0, i + 1), { text: '' }, ...popDraft.items.slice(i + 1)] }); } }} />
+                    <button type="button" className="text-xs text-red-600" onClick={() => setPopDraft({ ...popDraft, dirty: true, items: popDraft.items.filter((_, j) => j !== i) })}>remover</button>
+                  </div>
+                ))}
+                <div className="flex flex-wrap items-center gap-3 pt-1">
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setPopDraft({ ...popDraft, dirty: true, items: [...popDraft.items, { text: '' }] })}>+ Item</Button>
+                  {popDraft.dirty && popDraft.id && <span className="text-xs text-amber-700">Os itens alterados serão salvos no POP{(pops ?? []).find((x) => x.id === popDraft.id)?.global ? ' (como versão do escritório)' : ''} — vale para todos os modelos que usam este POP.</span>}
+                </div>
+              </div>
+            ) : <p className="text-xs text-ink-muted">Escolha um POP ou crie um novo. Ele aparece dentro de cada tarefa gerada e precisa estar todo marcado para concluir.</p>}
+            {edit.id && edit.openProcesses > 0 && (
+              <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={!!edit.applyPopToOpen} onChange={(e) => setEdit({ ...edit, applyPopToOpen: e.target.checked })} /> Aplicar também nas {edit.openProcesses} tarefa(s) já geradas e abertas</label>
+            )}
+          </section>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Agrupador de tarefas" hint="Só gera para clientes marcados com este agrupador."><Select className="w-full" value={edit.groupId ?? ''} onChange={(v) => setEdit({ ...edit, groupId: v })} placeholder="Todos os clientes do regime" options={(groups ?? []).map((g) => ({ value: g.id, label: g.name }))} /></Field>
+            <label className="mt-6 flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={edit.notifyClient !== false} onChange={(e) => setEdit({ ...edit, notifyClient: e.target.checked })} /><span>Ao concluir, enviar ao cliente<span className="block text-xs text-ink-muted">E-mail, WhatsApp e app, com a nota de envio.</span></span></label>
+          </div>
           <div>
             <span className="label">Etapas</span>
             <div className="space-y-2">
@@ -276,7 +340,7 @@ function Templates() {
               <Button variant="ghost" size="sm" onClick={() => setEdit({ ...edit, steps: [...edit.steps, { order: edit.steps.length + 1, title: '', dueOffsetDays: 0, priority: 'MEDIA', attachment: 'OPCIONAL' }] })}>+ Etapa</Button>
             </div>
           </div>
-          {edit.id && <Button variant="danger" size="sm" onClick={() => run(async () => { await apiDelete(`/tasks/templates/${edit.id}`); setEdit(null); reload(); }, 'Modelo excluído.')}>Excluir modelo</Button>}
+          {edit.id && edit.tenantId && <Button variant="danger" size="sm" onClick={() => confirm('Excluir este modelo? Se ele for a versão do escritório de um modelo padrão, o padrão volta a valer.') && run(async () => { const r = await apiDelete<any>(`/tasks/templates/${edit.id}`); setEdit(null); reload(); return r; }, 'Modelo excluído.')}>Excluir modelo</Button>}
         </>}
       </Modal>
 

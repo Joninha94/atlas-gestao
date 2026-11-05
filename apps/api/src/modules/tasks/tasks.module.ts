@@ -19,31 +19,39 @@ const StepSchema = z.object({
   dueOffsetDays: z.number().int().default(0),
   priority: z.enum(['BAIXA', 'MEDIA', 'ALTA', 'URGENTE']).default('MEDIA'),
   attachment: z.enum(['OPCIONAL', 'OBRIGATORIO_PARA_CONCLUIR', 'OBRIGATORIO_CONCLUIR_E_ENVIAR']).default('OPCIONAL'),
-  documentHint: z.string().optional(),
+  documentHint: z.string().nullish(),
 });
 
 const TemplateSchema = z.object({
   name: z.string().min(2),
-  category: z.string().optional(),
+  category: z.string().nullish(),
   regimes: z.array(z.enum(['MEI', 'SIMPLES_NACIONAL', 'LUCRO_PRESUMIDO', 'LUCRO_REAL', 'IMUNE_ISENTA', 'PESSOA_FISICA'])).default([]),
-  departmentId: z.string().uuid().optional(),
+  departmentId: z.string().uuid().nullish().or(z.literal('').transform(() => null)),
   deadlineMode: z.enum(['DATA_FIXA', 'TEMPO_ESTIMADO']).default('DATA_FIXA'),
-  dueDay: z.number().int().min(1).max(31).optional(),
+  dueDay: z.number().int().min(1).max(31).nullish(),
   dueMonthOffset: z.number().int().min(0).max(12).default(1),
-  estimatedHours: z.number().int().optional(),
-  targetDay: z.number().int().optional(),
+  estimatedHours: z.number().int().nullish(),
+  targetDay: z.number().int().nullish(),
   generatesFine: z.boolean().default(false),
   cascade: z.boolean().default(false),
   recurrence: z.enum(['NENHUMA', 'DIARIA', 'SEMANAL', 'MENSAL', 'TRIMESTRAL', 'SEMESTRAL', 'ANUAL']).default('MENSAL'),
-  recurrenceMonth: z.number().int().min(1).max(12).optional(),
+  recurrenceMonth: z.number().int().min(1).max(12).nullish(),
   dueSameYear: z.boolean().default(false),
   dueBusinessDay: z.number().int().min(1).max(23).nullish(),
   postpone: z.boolean().default(false),
   ufs: z.array(z.string().length(2).transform((v) => v.toUpperCase())).default([]),
   optIn: z.boolean().default(false),
   notes: z.string().max(2000).nullish(),
-  monitorLink: z.enum(['SIMPLES', 'MEI', 'DCTFWEB', 'FGTS', 'PARCELAMENTOS']).optional(),
+  monitorLink: z.enum(['SIMPLES', 'MEI', 'DCTFWEB', 'FGTS', 'PARCELAMENTOS']).nullish().or(z.literal('').transform(() => null)),
   steps: z.array(StepSchema).min(1),
+});
+
+/** Vínculos do escritório editados junto com o modelo (POP, agrupador, aviso ao cliente). */
+const LinkSchema = z.object({
+  popId: z.string().uuid().nullish().or(z.literal('')),
+  groupId: z.string().uuid().nullish().or(z.literal('')),
+  notifyClient: z.boolean().optional(),
+  applyPopToOpen: z.boolean().default(false),
 });
 
 @Controller('tasks')
@@ -85,15 +93,31 @@ export class TasksController {
 
   @Get('templates')
   async templates(@CurrentUser() u: AuthUser) {
-    const rows = await this.prisma.processTemplate.findMany({ where: { OR: [{ tenantId: u.tenantId }, { tenantId: null }] }, include: { steps: true }, orderBy: [{ category: 'asc' }, { name: 'asc' }] });
-    return rows.map((t) => ({ ...t, deadline: t.recurrence === 'NENHUMA' ? 'avulso' : describeDeadline(t) }));
+    const [rows, settings, pops, open, tenant] = await Promise.all([
+      this.prisma.processTemplate.findMany({ where: { OR: [{ tenantId: u.tenantId }, { tenantId: null }] }, include: { steps: true }, orderBy: [{ category: 'asc' }, { name: 'asc' }] }),
+      this.prisma.templateSetting.findMany({ where: { tenantId: u.tenantId } }),
+      this.prisma.pop.findMany({ where: { OR: [{ tenantId: u.tenantId }, { tenantId: null }] }, select: { id: true, title: true, items: true } }),
+      this.prisma.process.groupBy({ by: ['templateId'], where: { tenantId: u.tenantId, status: { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA', 'IMPEDIMENTO'] } }, _count: true }),
+      this.prisma.tenant.findUniqueOrThrow({ where: { id: u.tenantId }, select: { taskSettings: true } }),
+    ]);
+    // Versão do escritório substitui o modelo padrão de mesmo nome
+    const own = new Set(rows.filter((t) => t.tenantId).map((t) => t.name));
+    const notifyDefault = (tenant.taskSettings as any)?.notifyClientDefault ?? true;
+    return rows.filter((t) => t.tenantId || !own.has(t.name)).map((t) => {
+      const st = settings.find((x) => x.templateId === t.id);
+      const pop = st?.popId ? pops.find((x) => x.id === st.popId) : null;
+      return {
+        ...t, deadline: t.recurrence === 'NENHUMA' ? 'avulso' : describeDeadline(t),
+        popId: pop?.id ?? null, popTitle: pop?.title ?? null, popItems: (pop?.items as any[]) ?? [], groupId: st?.groupId ?? null,
+        notifyClient: st ? st.notifyClient : notifyDefault, openProcesses: open.find((o) => o.templateId === t.id)?._count ?? 0,
+      };
+    });
   }
 
   @Post('templates')
   @RequirePermission(PERMISSIONS.TASKS_MANAGE)
   createTemplate(@CurrentUser() u: AuthUser, @Body() body: unknown) {
-    const { steps, ...t } = TemplateSchema.parse(body);
-    return this.prisma.processTemplate.create({ data: { ...t, tenantId: u.tenantId, steps: { create: steps } } });
+    return this.tasks.saveTemplate(u.tenantId, { sub: u.sub, name: u.name }, null, TemplateSchema.parse(body), LinkSchema.parse(body ?? {}));
   }
 
   /** Duplicar modelo global para personalizar. */
@@ -248,17 +272,15 @@ export class TasksController {
 
   @Put('templates/:id')
   @RequirePermission(PERMISSIONS.TASKS_MANAGE)
-  async updateTemplate(@Param('id') id: string, @Body() body: unknown) {
-    const { steps, ...t } = TemplateSchema.parse(body);
-    await this.prisma.templateStep.deleteMany({ where: { templateId: id } });
-    return this.prisma.processTemplate.update({ where: { id }, data: { ...t, steps: { create: steps } }, include: { steps: true } });
+  async updateTemplate(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() body: unknown) {
+    return this.tasks.saveTemplate(u.tenantId, { sub: u.sub, name: u.name }, id, TemplateSchema.parse(body), LinkSchema.parse(body ?? {}));
   }
 
+  /** Excluir modelo do escritório. Se ele era a versão do escritório de um modelo padrão, volta a valer o padrão. */
   @Delete('templates/:id')
   @RequirePermission(PERMISSIONS.TASKS_MANAGE)
-  async deleteTemplate(@Param('id') id: string) {
-    await this.prisma.templateStep.deleteMany({ where: { templateId: id } });
-    return this.prisma.processTemplate.delete({ where: { id } });
+  deleteTemplate(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.tasks.deleteTemplate(u.tenantId, id);
   }
 
   @Post('tasks/:id/attachments')

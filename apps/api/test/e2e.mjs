@@ -810,6 +810,31 @@ await step('Configurar tarefas: mensagens editáveis, horário de acesso, usuár
   await assert.rejects(put('/tasks/config/email', { emailFrom: 'sem-arroba' }), /inválido/);
 });
 
+await step('Modelos de obrigações: editar modelo padrão (vira versão do escritório), vincular POP e aplicar nas tarefas abertas', async () => {
+  const das = (await get('/tasks/templates')).find((t) => t.name === 'PGDAS-D e DAS');
+  const pop = await post('/tasks/config/pops', { title: `POP DAS ${Date.now()}`, items: [{ text: 'Conferir faturamento' }, { text: 'Gerar DAS' }] });
+  const { id, tenantId, steps, deadline, popId, popTitle, popItems, groupId, notifyClient, openProcesses, createdAt, updatedAt, createdByAi, estimatedHours, targetDay, deadlineMode, ...rest } = das;
+  const body = { ...rest, notes: 'Editado pelo escritório', departmentId: rest.departmentId ?? undefined, monitorLink: rest.monitorLink ?? undefined, recurrenceMonth: rest.recurrenceMonth ?? undefined,
+    steps: steps.map(({ id: _i, templateId: _t, ...st }) => st), popId: pop.id, applyPopToOpen: true };
+  const saved = await put(`/tasks/templates/${das.id}`, body);
+  assert.notEqual(saved.id, das.id, 'virou versão do escritório');
+  assert.equal(saved.ownVersionOf, das.id);
+  assert.equal(saved.popId, pop.id);
+  const list = (await get('/tasks/templates')).filter((t) => t.name === 'PGDAS-D e DAS');
+  assert.equal(list.length, 1, 'só aparece a versão do escritório');
+  assert.equal(list[0].notes, 'Editado pelo escritório');
+  assert.equal(list[0].popTitle, pop.title);
+  const open = (await get('/tasks/processes?status=ABERTA')).filter((p) => p.templateId === saved.id);
+  if (open.length) assert.equal(open[0].popItems.length, 2, 'POP aplicado nas tarefas abertas');
+  // editar de novo a versão do escritório mantém o mesmo id
+  const again = await put(`/tasks/templates/${saved.id}`, { ...body, notes: 'Segunda edição' });
+  assert.equal(again.id, saved.id);
+  // excluir a versão do escritório volta ao padrão e devolve as tarefas
+  const del = await call('DELETE', `/tasks/templates/${saved.id}`);
+  assert.equal(del.restoredDefault, true);
+  assert.equal((await get('/tasks/templates')).find((t) => t.name === 'PGDAS-D e DAS').id, das.id);
+});
+
 await step('job que falha de vez vira alerta no painel e pode ser reprocessado', async () => {
   const me = await get('/auth/me');
   const q = new Queue('monitor', { connection: conn, prefix: process.env.QUEUE_PREFIX ?? 'produtiva' });

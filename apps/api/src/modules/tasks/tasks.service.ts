@@ -143,6 +143,93 @@ export class TasksService {
   }
 
   // ---------------------------------------------------------------------------
+  // Modelos de obrigações: criar, editar (inclusive os padrão) e vincular POP / agrupador / aviso
+  // ---------------------------------------------------------------------------
+  /**
+   * Salvar modelo. Modelo padrão (global) não é alterado: vira a "versão do escritório" com o mesmo nome,
+   * e as tarefas, ajustes por cliente, vínculos e fluxos do escritório passam a apontar para ela.
+   * `applyPopToOpen` aplica o POP também nas tarefas já geradas que ainda estão abertas.
+   */
+  async saveTemplate(tenantId: string, user: { sub: string; name?: string }, id: string | null, data: any, link: { popId?: string | null; groupId?: string | null; notifyClient?: boolean; applyPopToOpen?: boolean }) {
+    const { steps, ...t } = data;
+    let templateId: string;
+    if (!id) {
+      templateId = (await this.prisma.processTemplate.create({ data: { ...t, tenantId, steps: { create: steps } } })).id;
+    } else {
+      const cur = await this.prisma.processTemplate.findFirstOrThrow({ where: { id, OR: [{ tenantId }, { tenantId: null }] } });
+      if (cur.tenantId) {
+        await this.prisma.templateStep.deleteMany({ where: { templateId: id } });
+        await this.prisma.processTemplate.update({ where: { id }, data: { ...t, steps: { create: steps } } });
+        templateId = id;
+      } else {
+        const created = await this.prisma.processTemplate.create({ data: { ...t, name: cur.name, tenantId, steps: { create: steps } } });
+        templateId = created.id;
+        await this.repointTemplate(tenantId, id, templateId);
+      }
+    }
+    // Vínculos do escritório
+    const prev = await this.prisma.templateSetting.findUnique({ where: { tenantId_templateId: { tenantId, templateId } } });
+    const row = {
+      popId: link.popId === undefined ? prev?.popId ?? null : link.popId || null,
+      groupId: link.groupId === undefined ? prev?.groupId ?? null : link.groupId || null,
+      notifyClient: link.notifyClient ?? prev?.notifyClient ?? true,
+    };
+    await this.prisma.templateSetting.upsert({ where: { tenantId_templateId: { tenantId, templateId } }, create: { tenantId, templateId, ...row }, update: row });
+    let popApplied = 0;
+    if (link.applyPopToOpen) popApplied = await this.applyPopToOpen(tenantId, user, templateId, row.popId);
+    await this.prisma.auditLog.create({ data: { tenantId, userId: user.sub, action: id ? 'modelo.editar' : 'modelo.criar', entity: 'ProcessTemplate', entityId: templateId, meta: { from: id, popId: row.popId, popApplied } } });
+    const saved = await this.prisma.processTemplate.findUniqueOrThrow({ where: { id: templateId }, include: { steps: true } });
+    return { ...saved, popId: row.popId, groupId: row.groupId, notifyClient: row.notifyClient, popApplied, ownVersionOf: id && id !== templateId ? id : null };
+  }
+
+  /** Passa tudo do escritório que apontava para `from` (modelo padrão) para `to` (versão do escritório) — e vice-versa ao excluir. */
+  private async repointTemplate(tenantId: string, from: string, to: string) {
+    await this.prisma.process.updateMany({ where: { tenantId, templateId: from }, data: { templateId: to } });
+    for (const r of await this.prisma.clientObligation.findMany({ where: { tenantId, templateId: from } })) {
+      await this.prisma.clientObligation.upsert({ where: { clientId_templateId: { clientId: r.clientId, templateId: to } }, create: { tenantId, clientId: r.clientId, templateId: to, enabled: r.enabled }, update: { enabled: r.enabled } });
+    }
+    await this.prisma.clientObligation.deleteMany({ where: { tenantId, templateId: from } });
+    const st = await this.prisma.templateSetting.findUnique({ where: { tenantId_templateId: { tenantId, templateId: from } } });
+    if (st) {
+      await this.prisma.templateSetting.upsert({ where: { tenantId_templateId: { tenantId, templateId: to } }, create: { tenantId, templateId: to, popId: st.popId, groupId: st.groupId, notifyClient: st.notifyClient }, update: {} });
+      await this.prisma.templateSetting.delete({ where: { tenantId_templateId: { tenantId, templateId: from } } });
+    }
+    for (const f of await this.prisma.taskFlow.findMany({ where: { tenantId } })) {
+      const steps = (f.steps as { templateId: string; delayDays: number }[]) ?? [];
+      if (steps.some((x) => x.templateId === from)) await this.prisma.taskFlow.update({ where: { id: f.id }, data: { steps: steps.map((x) => (x.templateId === from ? { ...x, templateId: to } : x)) } });
+    }
+  }
+
+  async deleteTemplate(tenantId: string, id: string) {
+    const t = await this.prisma.processTemplate.findFirstOrThrow({ where: { id, tenantId } });
+    const global = await this.prisma.processTemplate.findFirst({ where: { tenantId: null, name: t.name } });
+    if (global) await this.repointTemplate(tenantId, id, global.id);
+    else {
+      const used = await this.prisma.process.count({ where: { tenantId, templateId: id } });
+      if (used) await this.prisma.process.updateMany({ where: { tenantId, templateId: id }, data: { templateId: null } });
+      await this.prisma.templateSetting.deleteMany({ where: { tenantId, templateId: id } });
+      await this.prisma.clientObligation.deleteMany({ where: { tenantId, templateId: id } });
+    }
+    await this.prisma.templateStep.deleteMany({ where: { templateId: id } });
+    await this.prisma.processTemplate.delete({ where: { id } });
+    return { deleted: true, restoredDefault: !!global };
+  }
+
+  /** Coloca (ou troca) o POP nas tarefas abertas do modelo. Itens já marcados que continuam no POP ficam marcados. */
+  async applyPopToOpen(tenantId: string, user: { sub: string; name?: string }, templateId: string, popId: string | null) {
+    const pop = popId ? await this.prisma.pop.findFirst({ where: { id: popId } }) : null;
+    const open = await this.prisma.process.findMany({ where: { tenantId, templateId, status: { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA', 'IMPEDIMENTO'] } } });
+    const items = ((pop?.items as { id: string; text: string }[]) ?? []);
+    for (const p of open) {
+      const old = (p.popChecks as Record<string, unknown> | null) ?? {};
+      const keep = Object.fromEntries(Object.entries(old).filter(([k]) => items.some((i) => i.id === k)));
+      await this.prisma.process.update({ where: { id: p.id }, data: { popId: pop?.id ?? null, popTitle: pop?.title ?? null, popItems: items as any, popChecks: keep as any } });
+      await logEvent(this.prisma, { tenantId, processId: p.id, kind: 'POP', actorId: user.sub, actorName: user.name, text: pop ? `POP atualizado pelo modelo: ${pop.title}` : 'POP removido pelo modelo' });
+    }
+    return open.length;
+  }
+
+  // ---------------------------------------------------------------------------
   // Obrigações por cliente: o padrão vem do modelo (regime, UF, opcional); o ajuste fino é por cliente.
   // ---------------------------------------------------------------------------
   async clientObligations(tenantId: string, clientId: string) {
