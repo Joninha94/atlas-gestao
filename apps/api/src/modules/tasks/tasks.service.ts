@@ -111,7 +111,8 @@ export class TasksService {
       const created = await this.prisma.process.create({
         data: {
           tenantId,
-          requireFiles: t.steps.some((s: any) => s.attachment !== 'OPCIONAL'),
+          requireFiles: t.steps.some((s: any) => s.attachment !== 'OPCIONAL') || docsOf(t).some((d) => d.required),
+          documents: docsOf(t) as any,
           templateId: t.id,
           clientId: client.id,
           title: t.name,
@@ -218,13 +219,15 @@ export class TasksService {
   /** Coloca (ou troca) o POP nas tarefas abertas do modelo. Itens já marcados que continuam no POP ficam marcados. */
   async applyPopToOpen(tenantId: string, user: { sub: string; name?: string }, templateId: string, popId: string | null) {
     const pop = popId ? await this.prisma.pop.findFirst({ where: { id: popId } }) : null;
+    const tpl = await this.prisma.processTemplate.findUnique({ where: { id: templateId } });
+    const docs = tpl ? docsOf(tpl) : [];
     const open = await this.prisma.process.findMany({ where: { tenantId, templateId, status: { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA', 'IMPEDIMENTO'] } } });
     const items = ((pop?.items as { id: string; text: string }[]) ?? []);
     for (const p of open) {
       const old = (p.popChecks as Record<string, unknown> | null) ?? {};
       const keep = Object.fromEntries(Object.entries(old).filter(([k]) => items.some((i) => i.id === k)));
-      await this.prisma.process.update({ where: { id: p.id }, data: { popId: pop?.id ?? null, popTitle: pop?.title ?? null, popItems: items as any, popChecks: keep as any } });
-      await logEvent(this.prisma, { tenantId, processId: p.id, kind: 'POP', actorId: user.sub, actorName: user.name, text: pop ? `POP atualizado pelo modelo: ${pop.title}` : 'POP removido pelo modelo' });
+      await this.prisma.process.update({ where: { id: p.id }, data: { popId: pop?.id ?? null, popTitle: pop?.title ?? null, popItems: items as any, popChecks: keep as any, documents: docs as any, requireFiles: p.requireFiles || docs.some((d) => d.required) } });
+      await logEvent(this.prisma, { tenantId, processId: p.id, kind: 'POP', actorId: user.sub, actorName: user.name, text: `${pop ? `POP atualizado pelo modelo: ${pop.title}` : 'POP removido pelo modelo'}${docs.length ? ` · anexos: ${docs.map((d) => d.name).join(', ')}` : ''}` });
     }
     return open.length;
   }
@@ -390,14 +393,45 @@ export class TasksService {
   // ---------------------------------------------------------------------------
   // Arquivos que serão entregues ao cliente (colocar e tirar enquanto a tarefa estiver aberta)
   // ---------------------------------------------------------------------------
-  async addFiles(tenantId: string, userId: string, processId: string, files: { fileKey: string; fileName: string; size?: number; mime?: string }[]) {
+  async addFiles(tenantId: string, userId: string, processId: string, files: { fileKey: string; fileName: string; size?: number; mime?: string; slotId?: string | null; sendToClient?: boolean }[]) {
     const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
     assertOpen(p.status, true);
     if (!files?.length) throw new BadRequestException('Nenhum arquivo enviado.');
-    await this.prisma.processFile.createMany({ data: files.map((f) => ({ processId, fileKey: f.fileKey, fileName: f.fileName, size: f.size ?? 0, mime: f.mime ?? null, uploadedById: userId })) });
-    await this.history(tenantId, userId, p, `Anexou ${files.length === 1 ? 'o arquivo' : `${files.length} arquivos`}`, files.map((f) => f.fileName).join(', '), 'ARQUIVO');
+    const docs = docsOf(p);
+    for (const f of files) if (f.slotId && !docs.some((d) => d.id === f.slotId)) throw new BadRequestException('Anexo não pertence a esta tarefa.');
+    await this.prisma.processFile.createMany({
+      data: files.map((f) => {
+        const slot = docs.find((d) => d.id === f.slotId);
+        return { processId, fileKey: f.fileKey, fileName: f.fileName, size: f.size ?? 0, mime: f.mime ?? null, uploadedById: userId, slotId: slot?.id ?? null, sendToClient: f.sendToClient ?? slot?.send ?? true };
+      }),
+    });
+    const slotName = docs.find((d) => d.id === files[0].slotId)?.name;
+    await this.history(tenantId, userId, p, `Anexou ${slotName ? `em "${slotName}"` : files.length === 1 ? 'o arquivo' : `${files.length} arquivos`}`, files.map((f) => f.fileName).join(', '), 'ARQUIVO');
     if (p.status === 'A_FAZER') await this.prisma.process.update({ where: { id: processId }, data: { status: 'EM_PROGRESSO' } });
     return this.prisma.processFile.findMany({ where: { processId }, orderBy: { createdAt: 'asc' } });
+  }
+
+  async updateFile(tenantId: string, user: { sub: string; name?: string }, processId: string, fileId: string, b: { sendToClient?: boolean; slotId?: string | null }) {
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    assertOpen(p.status, true);
+    const f = await this.prisma.processFile.findFirstOrThrow({ where: { id: fileId, processId } });
+    if (f.sentAt) throw new BadRequestException('Este arquivo já foi entregue ao cliente.');
+    const docs = docsOf(p);
+    if (b.slotId && !docs.some((d) => d.id === b.slotId)) throw new BadRequestException('Anexo não pertence a esta tarefa.');
+    const data = { ...(b.sendToClient !== undefined ? { sendToClient: !!b.sendToClient } : {}), ...(b.slotId !== undefined ? { slotId: b.slotId || null } : {}) };
+    const r = await this.prisma.processFile.update({ where: { id: fileId }, data });
+    if (b.sendToClient !== undefined) await logEvent(this.prisma, { tenantId, processId, kind: 'ARQUIVO', actorId: user.sub, actorName: user.name, text: `${b.sendToClient ? 'Incluiu' : 'Tirou'} ${f.fileName} ${b.sendToClient ? 'no' : 'do'} envio ao cliente` });
+    return r;
+  }
+
+  /** Ajusta os anexos exigidos da tarefa. Arquivos de um anexo removido continuam na tarefa, sem anexo vinculado. */
+  async setDocuments(tenantId: string, user: { sub: string; name?: string }, processId: string, documents: { id: string; name: string; required: boolean; send: boolean }[]) {
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    assertOpen(p.status, true);
+    await this.prisma.process.update({ where: { id: processId }, data: { documents: documents as any, requireFiles: p.requireFiles || documents.some((d) => d.required) } });
+    await this.prisma.processFile.updateMany({ where: { processId, sentAt: null, slotId: { notIn: documents.map((d) => d.id) } }, data: { slotId: null } });
+    await logEvent(this.prisma, { tenantId, processId, kind: 'ARQUIVO', actorId: user.sub, actorName: user.name, text: `Anexos da tarefa: ${documents.map((d) => `${d.name}${d.required ? '' : ' (opcional)'}`).join(', ') || 'nenhum'}` });
+    return documents;
   }
 
   async removeFile(tenantId: string, userId: string, processId: string, fileId: string) {
@@ -426,6 +460,8 @@ export class TasksService {
     this.config.assertPopComplete(p);
     const hasFiles = p.files.length > 0 || p.tasks.some((t) => t.attachments.length > 0);
     const needsFiles = p.requireFiles || p.tasks.some((t) => t.attachment !== 'OPCIONAL');
+    const missing = docsOf(p).filter((d) => d.required && !p.files.some((f) => f.slotId === d.id));
+    if (missing.length) throw new BadRequestException(`Faltam os anexos obrigatórios: ${missing.map((d) => d.name).join(', ')}.`);
     if (needsFiles && !hasFiles) throw new BadRequestException('Esta tarefa exige anexo: coloque pelo menos um documento antes de concluir.');
     const now = new Date();
     await this.prisma.processTask.updateMany({ where: { processId, done: false }, data: { done: true, doneAt: now, doneById: userId, blocked: false } });
@@ -509,6 +545,7 @@ export class TasksService {
   async createManual(tenantId: string, user: { sub: string; name?: string }, b: {
     clientId: string; title: string; description?: string | null; dueDate: string; competence?: string | null; assigneeId?: string | null;
     departmentId?: string | null; popId?: string | null; requireFiles?: boolean; templateId?: string | null; steps?: string[];
+    documents?: { id: string; name: string; required: boolean; send: boolean }[];
   }) {
     const client = await this.prisma.clientCompany.findFirstOrThrow({ where: { id: b.clientId, tenantId }, include: { responsibles: true } });
     const due = new Date(`${b.dueDate.slice(0, 10)}T12:00:00Z`);
@@ -524,7 +561,8 @@ export class TasksService {
       data: {
         tenantId, clientId: client.id, templateId: null, title: b.title.trim() || tpl?.name || 'Tarefa avulsa', competence, dueDate: due,
         ...defaults, ...(pop ? { popId: pop.id, popTitle: pop.title, popItems: pop.items as any } : {}),
-        requireFiles: !!b.requireFiles || steps.some((s) => s.attachment !== 'OPCIONAL'),
+        documents: (b.documents ?? (tpl ? docsOf(tpl) : [])) as any,
+        requireFiles: !!b.requireFiles || steps.some((s) => s.attachment !== 'OPCIONAL') || (b.documents ?? (tpl ? docsOf(tpl) : [])).some((d) => d.required),
         assigneeIds: b.assigneeId ? [b.assigneeId] : resp ? [resp.userId] : [user.sub],
         departmentIds: deptId ? [deptId] : [],
         tasks: { create: steps.map((s) => ({ ...s, dueDate: due })) },
@@ -748,6 +786,12 @@ export class TasksService {
       orderBy: { dueDate: 'asc' },
     });
   }
+}
+
+export type AnexoTarefa = { id: string; name: string; required: boolean; send: boolean };
+/** Anexos exigidos (modelo ou tarefa). */
+export function docsOf(x: { documents?: unknown }): AnexoTarefa[] {
+  return Array.isArray(x.documents) ? (x.documents as AnexoTarefa[]).filter((d) => d && d.id && d.name) : [];
 }
 
 /** Aberta = A fazer, Em progresso ou Em multa. `allowImpediment` permite mexer em anexos com impedimento. */

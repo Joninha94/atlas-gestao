@@ -835,6 +835,39 @@ await step('Modelos de obrigações: editar modelo padrão (vira versão do escr
   assert.equal((await get('/tasks/templates')).find((t) => t.name === 'PGDAS-D e DAS').id, das.id);
 });
 
+await step('Anexos da tarefa: PGDAS-D exige DAS, Recibo, Extrato e Declaração; arquivo interno não vai ao cliente', async () => {
+  const das = (await get('/tasks/templates')).find((t) => t.name === 'PGDAS-D e DAS');
+  assert.deepEqual(das.documents.map((d) => d.name), ['DAS', 'Recibo', 'Extrato do Simples', 'Declaração']);
+  const proc = await post(`/tasks/templates/${das.id}/apply`, { clientId: ctx.clientId, competence: '2025-01' });
+  const full = await get(`/tasks/processes/${proc.id}`);
+  assert.equal(full.documents.length, 4);
+  for (const it of full.popItems ?? []) await put(`/tasks/processes/${proc.id}/pop/${it.id}`, { checked: true });
+  const up = async (name, slotId, extra = {}) => {
+    const [f] = await upload([{ name, buf: await pdfWithText([name]) }]);
+    return post(`/tasks/processes/${proc.id}/files`, { files: [{ ...f, slotId, ...extra }] });
+  };
+  await up('DAS_01-2025.pdf', 'das');
+  await up('Recibo_PGDAS.pdf', 'recibo');
+  await up('Extrato_Simples.pdf', 'extrato');
+  const files = await up('planilha_interna.pdf', null, { sendToClient: false });
+  await assert.rejects(post(`/tasks/processes/${proc.id}/conclude`, {}), /Faltam os anexos obrigatórios: Declaração/);
+  await assert.rejects(post(`/tasks/processes/${proc.id}/files`, { files: [{ fileKey: 'x', fileName: 'x.pdf', slotId: 'nao-existe' }] }), /não pertence/);
+  await up('Declaracao_PGDAS.pdf', 'declaracao');
+  // tira do envio e volta
+  const extrato = files.find((f) => f.slotId === 'extrato');
+  await put(`/tasks/processes/${proc.id}/files/${extrato.id}`, { sendToClient: false });
+  await put(`/tasks/processes/${proc.id}/files/${extrato.id}`, { sendToClient: true });
+  const r = await post(`/tasks/processes/${proc.id}/conclude`, {});
+  assert.equal(r.aviso.files, 4, 'só os 4 anexos vão ao cliente (a planilha interna fica)');
+  const after = await get(`/tasks/processes/${proc.id}`);
+  assert.ok(after.files.find((f) => f.fileName === 'planilha_interna.pdf' && !f.sentAt), 'arquivo interno não enviado');
+  // anexo extra criado na própria tarefa
+  await post(`/tasks/processes/${proc.id}/reopen`, {});
+  const docs = await put(`/tasks/processes/${proc.id}/documents`, { documents: [...after.documents, { name: 'Guia complementar', required: true, send: true }] });
+  assert.equal(docs.at(-1).id, 'guia-complementar');
+  await assert.rejects(post(`/tasks/processes/${proc.id}/conclude`, {}), /Guia complementar/);
+});
+
 await step('job que falha de vez vira alerta no painel e pode ser reprocessado', async () => {
   const me = await get('/auth/me');
   const q = new Queue('monitor', { connection: conn, prefix: process.env.QUEUE_PREFIX ?? 'produtiva' });

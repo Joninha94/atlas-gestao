@@ -60,7 +60,10 @@ export function TaskPanel({ id, onClose, onChange }: { id: string; onClose: () =
   const popDone = popItems.filter((i) => checks[i.id]).length;
   const popOk = popDone === popItems.length;
   const files: any[] = p.files ?? [];
-  const pendingFiles = files.filter((f) => !f.sentAt);
+  const pendingFiles = files.filter((f) => !f.sentAt && f.sendToClient !== false);
+  const docs: { id: string; name: string; required: boolean; send: boolean }[] = Array.isArray(p.documents) ? p.documents : [];
+  const missingDocs = docs.filter((d) => d.required && !files.some((f) => f.slotId === d.id));
+  const looseFiles = files.filter((f) => !f.slotId || !docs.some((d) => d.id === f.slotId));
   const stepFiles = p.tasks.flatMap((t: any) => t.attachments.filter((a: any) => !a.sentToClientAt));
   const recipients = (p.client.contacts ?? []).flatMap((c: any) => [
     ...(c.receives.includes('EMAIL') && c.email ? String(c.email).split(/[;,\s]+/).filter((e: string) => e.includes('@')).map((e: string) => ({ ch: 'EMAIL', to: e, name: c.name })) : []),
@@ -70,14 +73,34 @@ export function TaskPanel({ id, onClose, onChange }: { id: string; onClose: () =
   const late = isOpen && new Date(p.dueDate) < new Date();
   const needsFiles = p.requireFiles || p.tasks.some((t: any) => t.attachment !== 'OPCIONAL');
   const hasFiles = files.length > 0 || p.tasks.some((t: any) => t.attachments.length > 0);
-  const fileLock = needsFiles && !hasFiles;
+  const fileLock = (needsFiles && !hasFiles) || missingDocs.length > 0;
   const canConclude = popOk && !fileLock;
 
-  const addFiles = (list: FileList | File[]) => run(async () => {
+  const addFiles = (list: FileList | File[], slotId: string | null = null) => run(async () => {
     const up = await uploadFiles(list, { withText: 'false' });
-    await apiPost(`/tasks/processes/${id}/files`, { files: up });
+    await apiPost(`/tasks/processes/${id}/files`, { files: up.map((f: any) => ({ ...f, slotId })) });
     refresh();
   }, 'Arquivo anexado.');
+  const fileRow = (f: any, opts: { assign?: boolean } = {}) => (
+    <li key={f.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+      <FileText size={15} className="shrink-0 text-ink-muted" />
+      <button className="min-w-0 flex-1 truncate text-left hover:underline" onClick={() => openSigned(`/tasks/processes/${id}/files/${f.id}/url`)}>{f.fileName}</button>
+      {f.size > 0 && <span className="text-xs text-ink-muted">{Math.max(1, Math.round(f.size / 1024))} KB</span>}
+      {opts.assign && docs.length > 0 && !f.sentAt && canFiles && (
+        <select className="input w-40 py-1 text-xs" value={f.slotId ?? ''} aria-label="Corresponde ao anexo" onChange={(e) => run(async () => { await apiPut(`/tasks/processes/${id}/files/${f.id}`, { slotId: e.target.value || null }); refresh(); })}>
+          <option value="">Outro arquivo</option>
+          {docs.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      )}
+      {f.sentAt ? <Badge tone="green">entregue {dateTime(f.sentAt)}</Badge> : <>
+        <label className={clsx('flex items-center gap-1 text-xs', f.sendToClient === false ? 'text-ink-muted' : 'text-brand-700')} title="Incluir este arquivo no envio ao cliente">
+          <input type="checkbox" disabled={!canFiles || busy} checked={f.sendToClient !== false} onChange={(e) => run(async () => { await apiPut(`/tasks/processes/${id}/files/${f.id}`, { sendToClient: e.target.checked }); refresh(); })} />
+          {f.sendToClient === false ? 'só interno' : 'enviar'}
+        </label>
+        {canFiles && <button aria-label={`Tirar ${f.fileName}`} title="Tirar arquivo" disabled={busy} onClick={() => run(async () => { await apiDelete(`/tasks/processes/${id}/files/${f.id}`); refresh(); }, 'Arquivo removido.')} className="rounded p-1 text-red-500 hover:bg-red-50"><Trash2 size={15} /></button>}
+      </>}
+    </li>
+  );
 
   return shell(<>
     {/* Cabeçalho */}
@@ -105,7 +128,7 @@ export function TaskPanel({ id, onClose, onChange }: { id: string; onClose: () =
         <Button variant="secondary" disabled={busy} onClick={() => { setReason(''); setReasonFor('impediment'); }}><PauseCircle size={15} /> Impedimento</Button>
         <Button variant="ghost" disabled={busy} onClick={() => { setReason(''); setReasonFor('dismiss'); }}><Ban size={15} /> Desconsiderar</Button>
         <span className="flex flex-col text-xs text-amber-700">
-          {fileLock && <span>Exige anexo: coloque pelo menos um documento.</span>}
+          {missingDocs.length > 0 ? <span>Faltam os anexos: {missingDocs.map((d) => d.name).join(', ')}.</span> : fileLock && <span>Exige anexo: coloque pelo menos um documento.</span>}
           {!popOk && <span>Falta marcar {popItems.length - popDone} item(ns) do POP.</span>}
         </span>
       </> : <>
@@ -128,32 +151,55 @@ export function TaskPanel({ id, onClose, onChange }: { id: string; onClose: () =
           </div>
         )}
 
-        {/* 1. Arquivos para entregar */}
+        {/* 1. Anexos para entregar ao cliente */}
         <section className="rounded-lg border border-slate-200 bg-white">
-          <h3 className="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5 text-sm font-semibold"><Paperclip size={15} className="text-brand-600" /> Arquivos para entregar ao cliente {needsFiles && <Badge tone={hasFiles ? 'green' : 'amber'}>{hasFiles ? 'anexo ok' : 'exige anexo'}</Badge>}</h3>
-          <div className="p-4">
+          <h3 className="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5 text-sm font-semibold">
+            <Paperclip size={15} className="text-brand-600" /> <span className="flex-1">Anexos para entregar ao cliente</span>
+            {docs.length > 0 && <Badge tone={missingDocs.length ? 'amber' : 'green'}>{docs.length - missingDocs.length}/{docs.length}{missingDocs.length ? '' : ' ok'}</Badge>}
+            {!docs.length && needsFiles && <Badge tone={hasFiles ? 'green' : 'amber'}>{hasFiles ? 'anexo ok' : 'exige anexo'}</Badge>}
+          </h3>
+          <div className="space-y-3 p-4">
+            {/* Anexos exigidos pelo modelo (ex.: DAS, Recibo, Extrato, Declaração) */}
+            {docs.length > 0 && (
+              <ul className="divide-y divide-slate-100 rounded-md border border-slate-200">
+                {docs.map((d) => {
+                  const mine = files.filter((f) => f.slotId === d.id);
+                  const ok = mine.length > 0;
+                  return (
+                    <li key={d.id} className={clsx(!ok && d.required && 'bg-amber-50/40')}>
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        {ok ? <CheckCircle2 size={17} className="shrink-0 text-emerald-600" /> : <span className={clsx('h-[17px] w-[17px] shrink-0 rounded-full border-2', d.required ? 'border-amber-400' : 'border-slate-300')} />}
+                        <span className="flex-1 text-sm font-medium">{d.name} {!d.required && <span className="text-xs font-normal text-ink-muted">(opcional)</span>} {!d.send && <span className="text-xs font-normal text-ink-muted">· só interno</span>}</span>
+                        {canFiles && (
+                          <label className="cursor-pointer rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-brand-700 hover:border-brand-400">
+                            <Upload size={12} className="mr-1 inline" />{ok ? 'Mais um' : 'Anexar'}
+                            <input type="file" multiple className="hidden" onChange={(e) => { if (e.target.files?.length) addFiles(e.target.files, d.id); e.target.value = ''; }} />
+                          </label>
+                        )}
+                      </div>
+                      {mine.length > 0 && <ul className="ml-7 border-t border-slate-100">{mine.map((f) => fileRow(f))}</ul>}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {canFiles && <AddDocSlot docs={docs} onSave={(list) => run(async () => { await apiPut(`/tasks/processes/${id}/documents`, { documents: list }); refresh(); }, 'Anexos da tarefa atualizados.')} />}
+
+            {/* Outros arquivos */}
             {canFiles && (
               <div onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
                 onDrop={(e) => { e.preventDefault(); setDrag(false); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); }}
                 onClick={() => fileInput.current?.click()} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && fileInput.current?.click()}
-                className={clsx('mb-3 flex cursor-pointer flex-col items-center gap-1 rounded-md border-2 border-dashed px-4 py-5 text-center text-sm transition', drag ? 'border-brand-500 bg-brand-50' : 'border-slate-200 hover:border-brand-400')}>
-                <Upload size={20} className="text-brand-600" />
-                <span><b className="text-brand-700">Clique para escolher</b> ou arraste os arquivos aqui</span>
-                <span className="text-xs text-ink-muted">PDF, XML, planilhas e imagens. Saem junto com a conclusão.</span>
+                className={clsx('flex cursor-pointer flex-col items-center gap-1 rounded-md border-2 border-dashed px-4 py-4 text-center text-sm transition', drag ? 'border-brand-500 bg-brand-50' : 'border-slate-200 hover:border-brand-400')}>
+                <Upload size={18} className="text-brand-600" />
+                <span><b className="text-brand-700">{docs.length ? 'Outros arquivos:' : 'Clique para escolher'}</b> {docs.length ? 'clique ou arraste aqui' : 'ou arraste os arquivos aqui'}</span>
+                <span className="text-xs text-ink-muted">Marque "enviar" nos que devem ir ao cliente; os demais ficam só na tarefa.</span>
                 <input ref={fileInput} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files?.length) addFiles(e.target.files); e.target.value = ''; }} />
               </div>
             )}
-            {files.length === 0 && stepFiles.length === 0 ? <p className="text-sm text-ink-muted">Nenhum arquivo anexado.</p> : (
+            {(looseFiles.length > 0 || stepFiles.length > 0) && (
               <ul className="divide-y divide-slate-100 rounded-md border border-slate-100">
-                {files.map((f) => (
-                  <li key={f.id} className="flex items-center gap-2 px-3 py-2 text-sm">
-                    <FileText size={15} className="shrink-0 text-ink-muted" />
-                    <button className="min-w-0 flex-1 truncate text-left hover:underline" onClick={() => openSigned(`/tasks/processes/${id}/files/${f.id}/url`)}>{f.fileName}</button>
-                    {f.size > 0 && <span className="text-xs text-ink-muted">{Math.max(1, Math.round(f.size / 1024))} KB</span>}
-                    {f.sentAt ? <Badge tone="green">entregue {dateTime(f.sentAt)}</Badge>
-                      : canFiles && <button aria-label={`Tirar ${f.fileName}`} title="Tirar arquivo" disabled={busy} onClick={() => run(async () => { await apiDelete(`/tasks/processes/${id}/files/${f.id}`); refresh(); }, 'Arquivo removido.')} className="rounded p-1 text-red-500 hover:bg-red-50"><Trash2 size={15} /></button>}
-                  </li>
-                ))}
+                {looseFiles.map((f) => fileRow(f, { assign: true }))}
                 {p.tasks.flatMap((t: any) => t.attachments.map((a: any) => (
                   <li key={a.id} className="flex items-center gap-2 px-3 py-2 text-sm">
                     <FileText size={15} className="shrink-0 text-ink-muted" /><span className="min-w-0 flex-1 truncate">{a.fileName} <span className="text-xs text-ink-muted">(etapa {t.order})</span></span>
@@ -162,6 +208,7 @@ export function TaskPanel({ id, onClose, onChange }: { id: string; onClose: () =
                 )))}
               </ul>
             )}
+            {!docs.length && !files.length && !stepFiles.length && !canFiles && <p className="text-sm text-ink-muted">Nenhum arquivo anexado.</p>}
           </div>
         </section>
 
@@ -303,7 +350,8 @@ export function TaskPanel({ id, onClose, onChange }: { id: string; onClose: () =
         <div>
           <div className="label">Vai junto ({pendingFiles.length + stepFiles.length} arquivo{pendingFiles.length + stepFiles.length === 1 ? '' : 's'})</div>
           {pendingFiles.length + stepFiles.length === 0 ? <p className="text-amber-700">Nenhum arquivo: o cliente recebe só o aviso de conclusão.</p>
-            : <ul className="list-inside list-disc text-ink-muted">{[...pendingFiles.map((f) => f.fileName), ...stepFiles.map((a: any) => a.fileName)].map((n, i) => <li key={i}>{n}</li>)}</ul>}
+            : <ul className="list-inside list-disc text-ink-muted">{[...pendingFiles.map((f) => `${docs.find((d) => d.id === f.slotId)?.name ? `${docs.find((d) => d.id === f.slotId)!.name}: ` : ''}${f.fileName}`), ...stepFiles.map((a: any) => a.fileName)].map((n, i) => <li key={i}>{n}</li>)}</ul>}
+          {files.some((f) => !f.sentAt && f.sendToClient === false) && <p className="mt-1 text-xs text-ink-muted">Ficam só na tarefa: {files.filter((f) => !f.sentAt && f.sendToClient === false).map((f) => f.fileName).join(', ')}.</p>}
         </div>
         <div>
           <div className="label">Para</div>
@@ -415,7 +463,7 @@ export function NewTaskModal({ onClose, onCreated }: { onClose: () => void; onCr
   const { data: pops } = useApi<any[]>('/tasks/config/pops');
   const { data: templates } = useApi<any[]>('/tasks/templates');
   const today = new Date().toISOString().slice(0, 10);
-  const [f, setF] = useState({ clientId: '', q: '', templateId: '', title: '', dueDate: today, competence: today.slice(0, 7), compTouched: false, assigneeId: '', departmentId: '', popId: '', requireFiles: false, steps: '', description: '' });
+  const [f, setF] = useState({ clientId: '', q: '', templateId: '', title: '', dueDate: today, competence: today.slice(0, 7), compTouched: false, assigneeId: '', departmentId: '', popId: '', requireFiles: false, steps: '', description: '', docs: '' });
   const { busy, run } = useAction();
   const list = (clients ?? []).filter((c) => !f.q || `${c.legalName} ${c.tradeName ?? ''} ${c.document}`.toLowerCase().includes(f.q.toLowerCase().replace(/[./-]/g, ''))).slice(0, 50);
   const avulsos = (templates ?? []).filter((t) => t.recurrence === 'NENHUMA');
@@ -428,6 +476,7 @@ export function NewTaskModal({ onClose, onCreated }: { onClose: () => void; onCr
           clientId: f.clientId, templateId: f.templateId || undefined, title: f.title, dueDate: f.dueDate, competence: f.competence, assigneeId: f.assigneeId || undefined,
           departmentId: f.departmentId || undefined, popId: f.popId || undefined, requireFiles: f.requireFiles, description: f.description || undefined,
           steps: f.templateId ? undefined : f.steps.split('\n').map((x) => x.trim()).filter(Boolean),
+          documents: f.docs.trim() ? f.docs.split('\n').map((x) => x.trim()).filter((x) => x.length >= 2).map((name) => ({ name, required: true, send: true })) : undefined,
         });
         onCreated(p.id);
       }, 'Tarefa criada.')}><PlusCircle size={15} /> Criar tarefa</Button></>}>
@@ -473,6 +522,7 @@ export function NewTaskModal({ onClose, onCreated }: { onClose: () => void; onCr
           <input type="checkbox" className="mt-0.5" checked={f.requireFiles} onChange={(e) => setF({ ...f, requireFiles: e.target.checked })} />
           <span><b>Exige anexo</b><span className="block text-xs text-ink-muted">Só conclui com pelo menos um documento anexado.</span></span>
         </label>
+        <Field label={tpl?.documents?.length ? `Anexos exigidos (vazio = do modelo: ${tpl.documents.map((d: any) => d.name).join(', ')})` : 'Anexos exigidos (um por linha, opcional)'}><textarea className="input" rows={3} value={f.docs} onChange={(e) => setF({ ...f, docs: e.target.value })} placeholder={'Contrato social\nComprovante de endereço'} /></Field>
         {!f.templateId && <Field label="Etapas (uma por linha, opcional)"><textarea className="input" rows={3} value={f.steps} onChange={(e) => setF({ ...f, steps: e.target.value })} placeholder={'Solicitar documentos\nElaborar\nRevisar'} /></Field>}
         <Field label="Observação (vai para o histórico)"><textarea className="input" rows={3} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
       </div>
@@ -496,5 +546,21 @@ export function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone
         <Field label="Gerar as tarefas que vencem em"><input type="month" className="input" value={month} onChange={(e) => setMonth(e.target.value)} /></Field>
       </>}
     </Modal>
+  );
+}
+
+/** "+ Anexo exigido": cria um anexo na própria tarefa (ex.: "Guia complementar"). */
+function AddDocSlot({ docs, onSave }: { docs: { id: string; name: string; required: boolean; send: boolean }[]; onSave: (list: any[]) => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [required, setRequired] = useState(true);
+  if (!open) return <button className="text-xs text-brand-700 hover:underline" onClick={() => setOpen(true)}>+ Anexo exigido nesta tarefa</button>;
+  return (
+    <form className="flex flex-wrap items-center gap-2 rounded-md bg-slate-50 p-2" onSubmit={(e) => { e.preventDefault(); if (name.trim().length >= 2) { onSave([...docs, { name: name.trim(), required, send: true }]); setName(''); setOpen(false); } }}>
+      <input className="input flex-1 py-1.5 text-sm" value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome do anexo (ex.: Guia complementar)" autoFocus />
+      <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} /> obrigatório</label>
+      <Button size="sm" disabled={name.trim().length < 2}>Adicionar</Button>
+      <Button size="sm" variant="ghost" type="button" onClick={() => setOpen(false)}>Cancelar</Button>
+    </form>
   );
 }

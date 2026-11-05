@@ -22,6 +22,22 @@ const StepSchema = z.object({
   documentHint: z.string().nullish(),
 });
 
+/** Anexos da tarefa (ex.: DAS, Recibo, Extrato do Simples, Declaração). */
+export const DocsSchema = z.array(z.object({
+  id: z.string().max(60).optional(),
+  name: z.string().trim().min(2, 'Nome do anexo muito curto').max(80),
+  required: z.boolean().default(true),
+  send: z.boolean().default(true),
+})).max(30).transform((list) => {
+  const used = new Set<string>();
+  return list.map((d) => {
+    let id = (d.id || d.name).normalize('NFD').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40) || 'anexo';
+    while (used.has(id)) id += '-2';
+    used.add(id);
+    return { ...d, id };
+  });
+});
+
 const TemplateSchema = z.object({
   name: z.string().min(2),
   category: z.string().nullish(),
@@ -44,6 +60,7 @@ const TemplateSchema = z.object({
   notes: z.string().max(2000).nullish(),
   monitorLink: z.enum(['SIMPLES', 'MEI', 'DCTFWEB', 'FGTS', 'PARCELAMENTOS']).nullish().or(z.literal('').transform(() => null)),
   steps: z.array(StepSchema).min(1),
+  documents: DocsSchema.default([]),
 });
 
 /** Vínculos do escritório editados junto com o modelo (POP, agrupador, aviso ao cliente). */
@@ -126,7 +143,7 @@ export class TasksController {
   async duplicate(@CurrentUser() u: AuthUser, @Param('id') id: string) {
     const { id: _id, tenantId: _t, steps, ...t } = await this.prisma.processTemplate.findUniqueOrThrow({ where: { id }, include: { steps: true } });
     return this.prisma.processTemplate.create({
-      data: { ...t, name: `${t.name} (cópia)`, tenantId: u.tenantId, steps: { create: steps.map(({ id: _s, templateId: _tt, ...s }) => s) } },
+      data: { ...t, documents: (t.documents ?? []) as any, name: `${t.name} (cópia)`, tenantId: u.tenantId, steps: { create: steps.map(({ id: _s, templateId: _tt, ...s }) => s) } },
     });
   }
 
@@ -180,6 +197,7 @@ export class TasksController {
       dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}/, 'Informe o vencimento'), competence: z.string().regex(/^\d{4}-\d{2}$/).nullish().or(z.literal('')),
       assigneeId: z.string().uuid().nullish().or(z.literal('')), departmentId: z.string().uuid().nullish().or(z.literal('')), popId: z.string().uuid().nullish().or(z.literal('')),
       templateId: z.string().uuid().nullish().or(z.literal('')), requireFiles: z.boolean().default(false), steps: z.array(z.string().max(200)).max(30).optional(),
+      documents: DocsSchema.optional(),
     }).refine((x) => x.title.trim().length >= 3 || !!x.templateId, { message: 'Dê um título à tarefa (mínimo 3 letras) ou escolha um modelo' }).parse(body);
     return this.tasks.createManual(u.tenantId, { sub: u.sub, name: u.name }, {
       ...b, competence: b.competence || null, assigneeId: b.assigneeId || null, departmentId: b.departmentId || null, popId: b.popId || null, templateId: b.templateId || null,
@@ -231,13 +249,25 @@ export class TasksController {
 
   /** Arquivos que serão entregues ao cliente (já enviados por POST /files). */
   @Post('processes/:id/files')
-  addFiles(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() b: { files: { fileKey: string; fileName: string; size?: number; mime?: string }[] }) {
+  addFiles(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() b: { files: { fileKey: string; fileName: string; size?: number; mime?: string; slotId?: string | null; sendToClient?: boolean }[] }) {
     return this.tasks.addFiles(u.tenantId, u.sub, id, b?.files ?? []);
   }
 
   @Delete('processes/:id/files/:fileId')
   removeFile(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('fileId') fileId: string) {
     return this.tasks.removeFile(u.tenantId, u.sub, id, fileId);
+  }
+
+  /** Marcar se o arquivo vai para o cliente e a qual anexo ele corresponde. */
+  @Put('processes/:id/files/:fileId')
+  updateFile(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('fileId') fileId: string, @Body() b: { sendToClient?: boolean; slotId?: string | null }) {
+    return this.tasks.updateFile(u.tenantId, { sub: u.sub, name: u.name }, id, fileId, b ?? {});
+  }
+
+  /** Anexos exigidos desta tarefa (vêm do modelo; dá para acrescentar ou ajustar na própria tarefa). */
+  @Put('processes/:id/documents')
+  setDocuments(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() b: { documents: unknown }) {
+    return this.tasks.setDocuments(u.tenantId, { sub: u.sub, name: u.name }, id, DocsSchema.parse(b?.documents ?? []));
   }
 
   @Get('processes/:id/files/:fileId/url')

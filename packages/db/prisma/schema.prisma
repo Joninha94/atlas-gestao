@@ -923,6 +923,7 @@ model ProcessTemplate {
   dueSameYear  Boolean      @default(false) // ANUAL: prazo no mesmo ano da competência (13º, férias coletivas)
   monitorLink  MonitorRoutine? // concluído automaticamente pelo Monitor
   createdByAi  Boolean      @default(false)
+  documents    Json     @default("[]") // anexos da tarefa: [{id, name, required, send}] (ex.: DAS, Recibo, Extrato, Declaração)
   steps        TemplateStep[]
   processes    Process[]
   clientRules  ClientObligation[]
@@ -984,6 +985,7 @@ model Process {
   dismissedAt      DateTime?
   dismissedById    String?
   requireFiles Boolean         @default(false) // só conclui com pelo menos um arquivo anexado
+  documents    Json            @default("[]")  // anexos exigidos copiados do modelo: [{id, name, required, send}]
   files        ProcessFile[]   // arquivos que serão entregues ao cliente
   deliveries   DeliveryNote[]
   comments     TaskComment[]
@@ -1255,6 +1257,8 @@ model ProcessFile {
   createdAt    DateTime  @default(now())
   sentAt       DateTime?
   deliveryId   String?
+  slotId       String?   // qual anexo do modelo este arquivo atende (ex.: "DAS")
+  sendToClient Boolean   @default(true) // vai na nota de envio ou fica só interno
 
   @@index([processId])
 }

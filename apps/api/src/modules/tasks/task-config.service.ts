@@ -162,8 +162,8 @@ export class TaskConfigService {
     const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } });
     const stepFiles = p.tasks.flatMap((t) => t.attachments).filter((a) => !a.sentToClientAt);
     const files = [
-      ...p.files.filter((f) => !f.sentAt).map((f) => ({ name: f.fileName, key: f.fileKey, size: f.size, mime: f.mime })),
-      ...stepFiles.map((a) => ({ name: a.fileName, key: a.fileKey, size: 0, mime: null as string | null })),
+      ...p.files.filter((f) => !f.sentAt && f.sendToClient).map((f) => ({ name: f.fileName, key: f.fileKey, size: f.size, mime: f.mime, label: docsLabel(p, f.slotId) })),
+      ...stepFiles.map((a) => ({ name: a.fileName, key: a.fileKey, size: 0, mime: null as string | null, label: null as string | null })),
     ];
     const [y, m] = p.competence.split('-');
     const comp = m ? `${m}/${y}` : p.competence;
@@ -202,7 +202,7 @@ export class TaskConfigService {
       '',
       ...(note.message ? ['Mensagem do escritório:', note.message, ''] : []),
       `Documentos entregues (${files.length}):`,
-      ...(files.length ? files.map((f, i) => `${i + 1}. ${f.name}`) : ['Nenhum arquivo anexado (aviso de conclusão).']),
+      ...(files.length ? files.map((f, i) => `${i + 1}. ${f.label ? `${f.label}: ` : ''}${f.name}`) : ['Nenhum arquivo anexado (aviso de conclusão).']),
       '',
       'Enviado para:',
       ...(planned.length ? planned.map((r) => `• ${canal[r.channel]}: ${r.channel === 'APP' ? r.name : r.to}`) : ['Nenhum contato cadastrado para receber.']),
@@ -268,7 +268,7 @@ export class TaskConfigService {
     }
 
     const now = new Date();
-    await this.prisma.processFile.updateMany({ where: { processId, sentAt: null }, data: { sentAt: now, deliveryId: note.id } });
+    await this.prisma.processFile.updateMany({ where: { processId, sentAt: null, sendToClient: true }, data: { sentAt: now, deliveryId: note.id } });
     await this.prisma.taskAttachment.updateMany({ where: { id: { in: stepFiles.map((f) => f.id) } }, data: { sentToClientAt: now } });
     await this.prisma.deliveryNote.update({ where: { id: note.id }, data: { pdfKey, recipients: planned } });
     await this.prisma.process.update({ where: { id: p.id }, data: { notifiedAt: now } });
@@ -296,6 +296,11 @@ export class TaskConfigService {
     ]);
     return auditEmailDomain({ domain, spf, dmarc, mx, dkimSelectors: dkim });
   }
+}
+
+function docsLabel(p: { documents?: unknown }, slotId: string | null) {
+  const d = Array.isArray(p.documents) ? (p.documents as { id: string; name: string }[]).find((x) => x.id === slotId) : null;
+  return d?.name ?? null;
 }
 
 function esc(s: string) {

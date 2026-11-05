@@ -193,7 +193,7 @@ function Templates() {
   const cats = [...new Set((data ?? []).map((t) => t.category ?? 'Outras'))].sort();
   const list = (data ?? []).filter((t) => (!q || t.name.toLowerCase().includes(q.toLowerCase())) && (!cat || (t.category ?? 'Outras') === cat)).sort((a, b) => (a.category ?? '').localeCompare(b.category ?? '') || a.name.localeCompare(b.name));
   const openEdit = (t: any) => {
-    setEdit({ ...t, departmentId: t.departmentId ?? '', monitorLink: t.monitorLink ?? '', notes: t.notes ?? '', category: t.category ?? '', popId: t.popId ?? '', groupId: t.groupId ?? '', applyPopToOpen: true,
+    setEdit({ ...t, departmentId: t.departmentId ?? '', monitorLink: t.monitorLink ?? '', notes: t.notes ?? '', category: t.category ?? '', popId: t.popId ?? '', groupId: t.groupId ?? '', applyPopToOpen: true, documents: Array.isArray(t.documents) ? t.documents : [],
       steps: [...t.steps].sort((a: any, b: any) => a.order - b.order).map(({ id, templateId, ...s }: any) => ({ ...s, documentHint: s.documentHint ?? undefined })) });
     const pop = (pops ?? []).find((x) => x.id === t.popId);
     setPopDraft(pop ? { id: pop.id, title: pop.title, items: pop.items, dirty: false } : null);
@@ -213,6 +213,7 @@ function Templates() {
     const body: any = { ...edit, popId, groupId: edit.groupId || null, departmentId: edit.departmentId || undefined, monitorLink: edit.monitorLink || undefined, recurrenceMonth: edit.recurrence === 'ANUAL' ? edit.recurrenceMonth : undefined, steps: edit.steps.map((s: any, i: number) => ({ ...s, order: i + 1 })) };
     for (const k of ['id', 'tenantId', 'createdByAi', 'estimatedHours', 'targetDay', 'deadlineMode', 'deadline', 'popTitle', 'popItems', 'openProcesses', 'createdAt', 'updatedAt']) delete body[k];
     body.dueBusinessDay = body.dueBusinessDay || null; body.notes = body.notes || null; body.category = body.category || null;
+    body.documents = (edit.documents ?? []).filter((d: any) => d.name?.trim().length >= 2);
     const r = edit.id ? await apiPut<any>(`/tasks/templates/${edit.id}`, body) : await apiPost<any>('/tasks/templates', body);
     setEdit(null); setPopDraft(null); reload(); reloadPops();
     return r;
@@ -223,10 +224,10 @@ function Templates() {
       <Select value={cat} onChange={setCat} placeholder="Todas as categorias" options={cats.map((c) => ({ value: c, label: c }))} />
       <input className="input w-48" placeholder="Buscar modelo" value={q} onChange={(e) => setQ(e.target.value)} />
       <Button variant="secondary" size="sm" onClick={() => setAi('')}><Wand2 size={14} /> Criar com IA</Button>
-      <Button size="sm" onClick={() => { setEdit({ ...structuredClone(EMPTY_TPL), popId: '', groupId: '', notifyClient: true, applyPopToOpen: true }); setPopDraft(null); }}>Novo modelo</Button>
+      <Button size="sm" onClick={() => { setEdit({ ...structuredClone(EMPTY_TPL), popId: '', groupId: '', notifyClient: true, applyPopToOpen: true, documents: [] }); setPopDraft(null); }}>Novo modelo</Button>
     </>}>
       {!data ? <Loading /> : (
-        <Table head={['Modelo', 'Categoria', 'Regimes', 'Recorrência', 'Prazo', 'Etapas', 'POP', '']}>
+        <Table head={['Modelo', 'Categoria', 'Regimes', 'Recorrência', 'Prazo', 'Etapas', 'Anexos', 'POP', '']}>
           {list.map((t) => (
             <tr key={t.id}>
               <td className="td font-medium">{t.name} {!t.tenantId && <Badge>padrão</Badge>} {t.monitorLink && <Badge tone="violet">Monitor</Badge>} {t.generatesFine && <Badge tone="red">multa</Badge>} {t.optIn && <Badge tone="amber">opcional</Badge>} {t.ufs?.length > 0 && <Badge tone="blue">{t.ufs.join(', ')}</Badge>}
@@ -236,6 +237,7 @@ function Templates() {
               <td className="td">{t.recurrence.toLowerCase()}</td>
               <td className="td text-xs">{t.deadline}</td>
               <td className="td">{t.steps.length}{t.cascade && ' (cascata)'}</td>
+              <td className="td max-w-[14rem] text-xs">{t.documents?.length ? <span title={t.documents.map((d: any) => d.name).join(', ')}>{t.documents.map((d: any) => d.name).join(', ')}</span> : <span className="text-ink-muted">—</span>}</td>
               <td className="td max-w-[12rem]">{t.popId ? <span className="inline-flex items-center gap-1 text-xs text-emerald-700" title={t.popTitle}><ClipboardCheck size={13} /><span className="truncate">{t.popItems.length} itens</span></span> : <span className="text-xs text-ink-muted">—</span>}</td>
               <td className="td whitespace-nowrap text-right">
                 <Button variant="secondary" size="sm" onClick={() => openEdit(t)}>Editar</Button>
@@ -283,6 +285,25 @@ function Templates() {
             </div>
           </div>
           <Field label="Base legal e observações para o time"><textarea className="input" rows={2} value={edit.notes ?? ''} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></Field>
+          <section className="rounded-md border border-brand-200 bg-brand-50/40 p-3">
+            <div className="mb-2 flex items-center gap-2">
+              <Paperclip size={16} className="text-brand-600" />
+              <span className="flex-1 text-sm font-semibold">Anexos da tarefa (o que vai para o cliente)</span>
+            </div>
+            <p className="mb-2 text-xs text-ink-muted">Ex.: PGDAS-D e DAS → DAS, Recibo, Extrato do Simples e Declaração. Os obrigatórios precisam estar anexados para a tarefa poder ser concluída e enviada.</p>
+            <div className="space-y-1.5">
+              {(edit.documents ?? []).map((d: any, i: number) => (
+                <div key={i} className="flex flex-wrap items-center gap-2">
+                  <span className="w-5 text-right text-xs text-ink-muted">{i + 1}.</span>
+                  <input className="input flex-1 py-1.5 text-sm" value={d.name} placeholder="Nome do anexo (ex.: DAS)" onChange={(e) => setEdit({ ...edit, documents: edit.documents.map((x: any, j: number) => (j === i ? { ...x, name: e.target.value } : x)) })} />
+                  <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={d.required !== false} onChange={(e) => setEdit({ ...edit, documents: edit.documents.map((x: any, j: number) => (j === i ? { ...x, required: e.target.checked } : x)) })} /> obrigatório</label>
+                  <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={d.send !== false} onChange={(e) => setEdit({ ...edit, documents: edit.documents.map((x: any, j: number) => (j === i ? { ...x, send: e.target.checked } : x)) })} /> enviar ao cliente</label>
+                  <button type="button" className="text-xs text-red-600" onClick={() => setEdit({ ...edit, documents: edit.documents.filter((_: any, j: number) => j !== i) })}>remover</button>
+                </div>
+              ))}
+              <Button type="button" variant="ghost" size="sm" onClick={() => setEdit({ ...edit, documents: [...(edit.documents ?? []), { name: '', required: true, send: true }] })}>+ Anexo</Button>
+            </div>
+          </section>
           <section className="rounded-md border border-amber-200 bg-amber-50/40 p-3">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <ClipboardCheck size={16} className="text-amber-600" />
@@ -317,7 +338,7 @@ function Templates() {
               </div>
             ) : <p className="text-xs text-ink-muted">Escolha um POP ou crie um novo. Ele aparece dentro de cada tarefa gerada e precisa estar todo marcado para concluir.</p>}
             {edit.id && edit.openProcesses > 0 && (
-              <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={!!edit.applyPopToOpen} onChange={(e) => setEdit({ ...edit, applyPopToOpen: e.target.checked })} /> Aplicar também nas {edit.openProcesses} tarefa(s) já geradas e abertas</label>
+              <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={!!edit.applyPopToOpen} onChange={(e) => setEdit({ ...edit, applyPopToOpen: e.target.checked })} /> Aplicar o POP e os anexos também nas {edit.openProcesses} tarefa(s) já geradas e abertas</label>
             )}
           </section>
           <div className="grid grid-cols-2 gap-3">

@@ -7,7 +7,7 @@
  */
 import { createPrismaClient } from '../src';
 import { OBRIGACOES, RENAMES } from './obrigacoes';
-import { DOCUMENTOS, ETAPAS, FLUXOS, MENSAGENS, POPS } from '../src/padroes-tarefas';
+import { ANEXOS_POR_MODELO, DOCUMENTOS, ETAPAS, FLUXOS, MENSAGENS, POPS } from '../src/padroes-tarefas';
 import argon2 from 'argon2';
 
 // Seed roda com o papel de sistema (BYPASSRLS) para criar dados de qualquer escritório.
@@ -130,6 +130,7 @@ async function main() {
       monitorLink: t.monitorLink ?? null,
       notes: t.notes ?? null,
       estimatedHours: t.hours ?? null,
+      documents: ANEXOS_POR_MODELO[t.name] ?? [],
     };
     const steps = t.steps.map((title, i) => ({
       order: i + 1,

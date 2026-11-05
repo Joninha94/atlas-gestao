@@ -142,3 +142,26 @@ export const DOCUMENTOS: { name: string; category: string; body: string }[] = [
     body: 'Prezado(a) {{cliente.representante}},\n\nPara concluirmos as obrigações da competência {{competencia}} de {{cliente.razao_social}}, solicitamos o envio dos seguintes documentos até {{data_limite}}:\n\n• Extratos bancários de todas as contas\n• Notas fiscais de entrada e saída\n• Variáveis da folha de pagamento\n\nOs documentos podem ser enviados pelo aplicativo ou por e-mail.',
   },
 ];
+
+/** Anexos de cada obrigação (o que precisa estar na tarefa para poder enviar ao cliente). */
+export type AnexoModelo = { id: string; name: string; required: boolean; send: boolean };
+const a = (id: string, name: string, required = true, send = true): AnexoModelo => ({ id, name, required, send });
+export const ANEXOS_POR_MODELO: Record<string, AnexoModelo[]> = {
+  'PGDAS-D e DAS': [a('das', 'DAS'), a('recibo', 'Recibo'), a('extrato', 'Extrato do Simples'), a('declaracao', 'Declaração')],
+  'DAS-MEI': [a('das', 'DAS-MEI')],
+  'DCTFWeb (previdenciária)': [a('recibo', 'Recibo da DCTFWeb'), a('darf', 'DARF')],
+  'DCTFWeb MIT (IRPJ, CSLL, PIS, COFINS, IPI)': [a('recibo', 'Recibo da DCTFWeb'), a('darf', 'DARF')],
+  'FGTS Digital': [a('guia', 'Guia do FGTS')],
+  'Folha de pagamento': [a('holerites', 'Holerites'), a('resumo', 'Resumo da folha'), a('relatorio', 'Relatório de encargos', false)],
+  'Pró-labore': [a('recibo', 'Recibo de pró-labore')],
+  'EFD-Reinf': [a('recibo', 'Recibo da EFD-Reinf')],
+  'DeSTDA': [a('recibo', 'Recibo da DeSTDA'), a('guia', 'Guia de ICMS', false)],
+  'Apuração ICMS': [a('apuracao', 'Livro de apuração', true, false), a('guia', 'Guia de ICMS')],
+  'Apuração ISS': [a('guia', 'Guia do ISS')],
+  'PIS/COFINS (DARF)': [a('darf', 'DARF')],
+  'DEFIS': [a('recibo', 'Recibo da DEFIS'), a('declaracao', 'Declaração')],
+  'DASN-SIMEI': [a('recibo', 'Recibo da DASN-SIMEI')],
+  'Balancete mensal': [a('balancete', 'Balancete')],
+  'Demonstrações contábeis anuais (Balanço e DRE)': [a('balanco', 'Balanço Patrimonial'), a('dre', 'DRE')],
+  'Declaração de IRPF': [a('recibo', 'Recibo'), a('declaracao', 'Declaração'), a('darf', 'DARF (quotas)', false)],
+};
