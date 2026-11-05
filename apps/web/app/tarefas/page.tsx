@@ -76,8 +76,8 @@ function List({ initialStatus, mine }: { initialStatus: string; mine: boolean })
   return (
     <Card pad={false}>
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3">
-        <SearchInput className="w-full sm:w-64" value={search} onChange={setSearch} placeholder="Pesquisar empresa (nome ou CNPJ)" />
-        <SearchInput className="w-full sm:w-56" value={searchAtv} onChange={setSearchAtv} placeholder="Pesquisar atividade (ex.: DAS)" />
+        <SearchInput className="w-full sm:w-64" value={search} onChange={setSearch} placeholder="Empresa (nome ou CNPJ)" />
+        <SearchInput className="w-full sm:w-56" value={searchAtv} onChange={setSearchAtv} placeholder="Atividade (ex.: DAS, Folha)" />
         <MonthInput value={f.competence} onChange={(v: string) => setF({ ...f, competence: v })} allowEmpty />
         <Select value={f.status} onChange={(v) => setF({ ...f, status: v })} placeholder="Todos os status" options={[
           { value: 'ABERTA', label: 'Abertas' }, { value: 'EM_MULTA', label: 'Abertas em multa' }, { value: 'IMPEDIMENTO', label: 'Impedimento' },

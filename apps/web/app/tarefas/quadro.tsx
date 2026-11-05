@@ -41,8 +41,8 @@ export function Board() {
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <SearchInput className="w-full sm:w-64" value={search} onChange={setSearch} placeholder="Pesquisar empresa (nome ou CNPJ)" />
-        <SearchInput className="w-full sm:w-56" value={searchAtv} onChange={setSearchAtv} placeholder="Pesquisar atividade (ex.: DAS)" />
+        <SearchInput className="w-full sm:w-64" value={search} onChange={setSearch} placeholder="Empresa (nome ou CNPJ)" />
+        <SearchInput className="w-full sm:w-56" value={searchAtv} onChange={setSearchAtv} placeholder="Atividade (ex.: DAS, Folha)" />
         <MonthInput value={f.competence} onChange={(v: string) => setF({ ...f, competence: v })} allowEmpty />
         <Select value={f.assigneeId} onChange={(v) => setF({ ...f, assigneeId: v })} placeholder="Todos os responsáveis" options={(users ?? []).map((u) => ({ value: u.id, label: u.name }))} />
         <Select value={f.departmentId} onChange={(v) => setF({ ...f, departmentId: v })} placeholder="Todos os setores" options={(deps ?? []).map((d) => ({ value: d.id, label: d.name }))} />
