@@ -76,7 +76,6 @@ export function Configurar({ onOpenTab }: { onOpenTab: (tab: string) => void }) 
     ] },
     { title: 'Tarefas de solicitações de serviço', icon: <Inbox size={18} />, items: [
       { label: 'Gerenciar', sec: 'avulsos', count: s?.avulsos },
-      { label: 'Formulários do app', tab: 'os', count: s?.forms },
     ] },
     { title: 'Fluxo de tarefas', icon: <GitBranch size={18} />, items: [
       { label: 'Gerenciar', sec: 'fluxos', count: s?.flows },
@@ -302,7 +301,6 @@ function TemplateSettings({ recurring, onOpenTab }: { recurring: boolean; onOpen
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3">
         <input className="input w-72" placeholder="Buscar modelo…" value={q} onChange={(e) => setQ(e.target.value)} />
         <span className="text-xs text-ink-muted">{recurring ? 'Ligue um POP, um agrupador e o aviso ao cliente em cada obrigação.' : 'Modelos avulsos: usados por ordens de serviço, fluxos e aplicação manual.'}</span>
-        {!recurring && onOpenTab && <Button size="sm" variant="secondary" className="ml-auto" onClick={() => onOpenTab('os')}>Formulários do app</Button>}
       </div>
       {!data || !pops || !groups ? <Loading /> : (
         <Table head={['Modelo', 'POP', 'Agrupador de tarefas', 'Avisar cliente']} empty={!rows.length}>

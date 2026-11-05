@@ -11,7 +11,7 @@ import { useAction, useApi, useDebounced } from '../../lib/hooks';
 import { competence, date, dateTime, label, lastCompetence } from '../../lib/format';
 import { Badge, Button, Card, Empty, Field, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Table, Tabs, MonthInput, SearchInput, DueDate } from '../../components/ui';
 
-type Tab = 'lista' | 'quadro' | 'calendario' | 'arraste' | 'modelos' | 'os' | 'configurar';
+type Tab = 'lista' | 'quadro' | 'calendario' | 'arraste' | 'modelos' | 'configurar';
 
 export default function TarefasPage() {
   return <Suspense fallback={<Loading />}><Tarefas /></Suspense>;
@@ -42,12 +42,11 @@ function Tarefas() {
         <Stat label="Vencendo em 7 dias" value={dash.vencendo7d?.length ?? 0} />
         <Stat label="Concluídas (30 dias)" value={dash.concluidos30d} tone="green" />
       </div>}
-      <Tabs value={tab} onChange={setTab} tabs={[{ id: 'lista', label: 'Processos' }, { id: 'quadro', label: 'Quadro' }, { id: 'calendario', label: 'Calendário' }, { id: 'arraste', label: 'Arrasta-e-solta inteligente' }, { id: 'modelos', label: 'Modelos de obrigações' }, { id: 'os', label: 'Formulários e ordens de serviço' }, { id: 'configurar', label: 'Configurar' }]} />
+      <Tabs value={tab} onChange={setTab} tabs={[{ id: 'lista', label: 'Processos' }, { id: 'quadro', label: 'Quadro' }, { id: 'calendario', label: 'Calendário' }, { id: 'arraste', label: 'Arrasta-e-solta inteligente' }, { id: 'modelos', label: 'Modelos de obrigações' }, { id: 'configurar', label: 'Configurar' }]} />
       {tab === 'lista' && <List key={listKey} initialStatus={params.get('status') ?? 'ABERTA'} mine={params.get('mine') === '1'} />}
       {tab === 'calendario' && <Calendar />}
       {tab === 'arraste' && <SmartDrop />}
       {tab === 'modelos' && <Templates />}
-      {tab === 'os' && <Orders />}
       {tab === 'quadro' && <Board />}
       {tab === 'configurar' && <Configurar onOpenTab={(t) => setTab(t as Tab)} />}
     </div>
@@ -383,75 +382,4 @@ function Templates() {
 }
 
 const FIELD_TYPES = ['TEXTO', 'NUMERO', 'DATA', 'ESCOLHA_UNICA', 'MULTIPLA_ESCOLHA', 'ANEXO', 'CPF', 'CNPJ'];
-
-function Orders() {
-  const { data: forms, reload: reloadForms } = useApi<any[]>('/tasks/forms');
-  const { data: orders, reload } = useApi<any[]>('/tasks/service-orders');
-  const { data: deps } = useApi<any[]>('/departments');
-  const [edit, setEdit] = useState<any>(null);
-  const [ai, setAi] = useState<string | null>(null);
-  const [view, setView] = useState<any>(null);
-  const { busy, run } = useAction();
-  return (
-    <div className="grid gap-4 xl:grid-cols-[1fr_1.4fr]">
-      <Card pad={false} title="Formulários de solicitação" actions={<>
-        <Button variant="secondary" size="sm" onClick={() => setAi('')}><Wand2 size={14} /> Criar com IA</Button>
-        <Button size="sm" onClick={() => setEdit({ name: '', departmentId: '', fields: [{ label: '', type: 'TEXTO', required: true }] })}>Novo</Button>
-      </>}>
-        {!forms ? <Loading /> : (
-          <ul className="divide-y divide-slate-100">{forms.map((f) => (
-            <li key={f.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
-              <div><div className="font-medium">{f.name} {!f.tenantId && <Badge>padrão</Badge>}</div><div className="text-xs text-ink-muted">{(f.fields as any[]).length} campos · {deps?.find((d) => d.id === f.departmentId)?.name ?? 'sem setor'}</div></div>
-              {f.tenantId && <Button variant="ghost" size="sm" onClick={() => setEdit({ ...f, departmentId: f.departmentId ?? '' })}>Editar</Button>}
-            </li>
-          ))}</ul>
-        )}
-      </Card>
-      <Card pad={false} title="Ordens de serviço recebidas" actions={<>
-        {(['xlsx', 'txt', 'pdf'] as const).map((fmt) => <Button key={fmt} variant="secondary" size="sm" onClick={() => run(() => download(`/tasks/service-orders/export?format=${fmt}`, `ordens_servico.${fmt}`))}><FileDown size={13} /> {fmt.toUpperCase()}</Button>)}
-      </>}>
-        {!orders ? <Loading /> : (
-          <Table empty={!orders.length} head={['Recebida', 'Cliente', 'Formulário', 'Status', '']}>
-            {orders.map((o) => (
-              <tr key={o.id}>
-                <td className="td text-xs">{dateTime(o.createdAt)}</td>
-                <td className="td">{o.client.legalName}</td>
-                <td className="td">{o.form.name}</td>
-                <td className="td"><Select className="text-xs" value={o.status} onChange={(v) => run(() => apiPut(`/tasks/service-orders/${o.id}/status`, { status: v }).then(reload))} options={['A_FAZER', 'EM_PROGRESSO', 'CONCLUIDO', 'DISPENSADO'].map((v) => ({ value: v, label: label(v) }))} /></td>
-                <td className="td text-right"><Button variant="ghost" size="sm" onClick={() => setView(o)}>Ver respostas</Button></td>
-              </tr>
-            ))}
-          </Table>
-        )}
-      </Card>
-
-      <Modal open={!!view} title={view?.form.name ?? ''} onClose={() => setView(null)}>
-        {view && <dl className="space-y-2 text-sm">{Object.entries(view.answers as Record<string, unknown>).map(([k, v]) => <div key={k}><dt className="text-xs text-ink-muted">{k}</dt><dd>{Array.isArray(v) ? v.join(', ') : String(v)}</dd></div>)}</dl>}
-      </Modal>
-      <Modal open={ai !== null} title="Criar formulário com IA" onClose={() => setAi(null)} footer={<Button disabled={busy || !ai} onClick={() => run(async () => { const d = await apiPost('/tasks/forms/ai-draft', { description: ai }); setAi(null); setEdit({ name: d.name, departmentId: '', fields: d.fields }); })}><Sparkles size={14} /> Gerar</Button>}>
-        <Field label="Que solicitação o cliente vai fazer?"><textarea className="input" rows={3} value={ai ?? ''} onChange={(e) => setAi(e.target.value)} placeholder="Ex.: pedido de férias de colaborador" /></Field>
-      </Modal>
-      <Modal wide open={!!edit} title={edit?.id ? 'Editar formulário' : 'Novo formulário'} onClose={() => setEdit(null)} footer={<Button disabled={busy || !edit?.name} onClick={() => run(async () => { const body = { name: edit.name, departmentId: edit.departmentId || undefined, fields: edit.fields }; if (edit.id) await apiPut(`/tasks/forms/${edit.id}`, body); else await apiPost('/tasks/forms', body); setEdit(null); reloadForms(); }, 'Formulário salvo.')}>Salvar</Button>}>
-        {edit && <>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Nome"><input className="input" value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
-            <Field label="Cai para o departamento"><Select className="w-full" value={edit.departmentId} onChange={(v) => setEdit({ ...edit, departmentId: v })} placeholder="—" options={(deps ?? []).map((d) => ({ value: d.id, label: d.name }))} /></Field>
-          </div>
-          <div className="space-y-2">
-            {edit.fields.map((f: any, i: number) => (
-              <div key={i} className="flex flex-wrap items-center gap-2">
-                <input className="input flex-1" value={f.label} placeholder="Pergunta" onChange={(e) => { const fs = [...edit.fields]; fs[i] = { ...f, label: e.target.value }; setEdit({ ...edit, fields: fs }); }} />
-                <Select value={f.type} onChange={(v) => { const fs = [...edit.fields]; fs[i] = { ...f, type: v }; setEdit({ ...edit, fields: fs }); }} options={FIELD_TYPES.map((t) => ({ value: t, label: t.toLowerCase().replace('_', ' ') }))} />
-                {['ESCOLHA_UNICA', 'MULTIPLA_ESCOLHA'].includes(f.type) && <input className="input w-48" placeholder="Opções (vírgula)" value={(f.options ?? []).join(', ')} onChange={(e) => { const fs = [...edit.fields]; fs[i] = { ...f, options: e.target.value.split(',').map((x) => x.trim()) }; setEdit({ ...edit, fields: fs }); }} />}
-                <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={f.required} onChange={(e) => { const fs = [...edit.fields]; fs[i] = { ...f, required: e.target.checked }; setEdit({ ...edit, fields: fs }); }} /> obrigatório</label>
-                <button className="text-xs text-red-600" onClick={() => setEdit({ ...edit, fields: edit.fields.filter((_: any, j: number) => j !== i) })}>remover</button>
-              </div>
-            ))}
-            <Button variant="ghost" size="sm" onClick={() => setEdit({ ...edit, fields: [...edit.fields, { label: '', type: 'TEXTO', required: false }] })}>+ Campo</Button>
-          </div>
-        </>}
-      </Modal>
-    </div>
-  );
-}
 
