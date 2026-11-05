@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { BellRing, Check, ChevronDown, ChevronRight, ClipboardCheck, Copy, FileDown, Lock, Paperclip, Send, Settings2, Sparkles, Upload, Wand2 } from 'lucide-react';
 import { Board } from './quadro';
+import { TaskPanel } from './tarefa';
 import { Configurar } from './configurar';
 import { apiPost, apiPut, apiDelete, download, getSession, uploadFiles } from '../../lib/api';
 import { useAction, useApi } from '../../lib/hooks';
@@ -25,10 +26,13 @@ function Tarefas() {
       <PageHeader title="Tarefas" subtitle="Obrigações acessórias recorrentes, modelos por regime, POP, cascata, anexos e ordens de serviço dos clientes."
         actions={<Button variant={tab === 'configurar' ? 'primary' : 'secondary'} onClick={() => setTab('configurar')}><Settings2 size={15} /> Configurar</Button>} />
       {dash && <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="A fazer" value={dash.aFazer} /><Stat label="Em progresso" value={dash.emProgresso} /><Stat label="Em multa" value={dash.emMulta} tone={dash.emMulta ? 'red' : undefined} /><Stat label="Concluídas (30 dias)" value={dash.concluidos30d} tone="green" />
+        <Stat label="Abertas" value={dash.abertas ?? dash.aFazer + dash.emProgresso} hint={dash.emMulta ? `${dash.emMulta} em multa` : undefined} tone={dash.emMulta ? 'amber' : undefined} />
+        <Stat label="Impedimento" value={dash.impedimento ?? 0} tone={dash.impedimento ? 'red' : undefined} />
+        <Stat label="Vencendo em 7 dias" value={dash.vencendo7d?.length ?? 0} />
+        <Stat label="Concluídas (30 dias)" value={dash.concluidos30d} tone="green" />
       </div>}
       <Tabs value={tab} onChange={setTab} tabs={[{ id: 'lista', label: 'Processos' }, { id: 'quadro', label: 'Quadro' }, { id: 'calendario', label: 'Calendário' }, { id: 'arraste', label: 'Arrasta-e-solta inteligente' }, { id: 'modelos', label: 'Modelos de obrigações' }, { id: 'os', label: 'Formulários e ordens de serviço' }, { id: 'configurar', label: 'Configurar' }]} />
-      {tab === 'lista' && <List initialStatus={params.get('status') ?? ''} mine={params.get('mine') === '1'} />}
+      {tab === 'lista' && <List initialStatus={params.get('status') ?? 'ABERTA'} mine={params.get('mine') === '1'} openId={params.get('processo')} />}
       {tab === 'calendario' && <Calendar />}
       {tab === 'arraste' && <SmartDrop />}
       {tab === 'modelos' && <Templates />}
@@ -39,146 +43,72 @@ function Tarefas() {
   );
 }
 
-function List({ initialStatus, mine }: { initialStatus: string; mine: boolean }) {
+function List({ initialStatus, mine, openId }: { initialStatus: string; mine: boolean; openId?: string | null }) {
   const me = getSession()?.user.id ?? '';
-  const [f, setF] = useState({ status: initialStatus, competence: lastCompetence(), departmentId: '', assigneeId: mine ? me : '' });
+  const [f, setF] = useState({ status: initialStatus, competence: openId ? '' : lastCompetence(), departmentId: '', assigneeId: mine ? me : '' });
   const q = new URLSearchParams(Object.fromEntries(Object.entries(f).filter(([, v]) => v))).toString();
   const { data, reload } = useApi<any[]>(`/tasks/processes?${q}`);
   const { data: deps } = useApi<any[]>('/departments');
   const { data: users } = useApi<any[]>('/users');
-  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [current, setCurrent] = useState<string | null>(openId ?? null);
   const [sel, setSel] = useState<Set<string>>(new Set());
-  const [dismiss, setDismiss] = useState<any>(null);
   const [bulk, setBulk] = useState<any>(null);
   const { busy, run } = useAction();
-  const toggle = (set: Set<string>, setter: (s: Set<string>) => void, id: string) => { const n = new Set(set); n.has(id) ? n.delete(id) : n.add(id); setter(n); };
+  const toggle = (id: string) => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); setSel(n); };
   const uname = (id: string) => users?.find((u) => u.id === id)?.name?.split(' ')[0] ?? '—';
 
   return (
     <Card pad={false}>
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3">
-        <input type="month" className="input w-40" value={f.competence} onChange={(e) => setF({ ...f, competence: e.target.value })} />
-        <Select value={f.status} onChange={(v) => setF({ ...f, status: v })} placeholder="Todos os status" options={['A_FAZER', 'EM_PROGRESSO', 'CONCLUIDO', 'DISPENSADO', 'EM_MULTA'].map((v) => ({ value: v, label: label(v) }))} />
+        <input type="month" className="input w-40" value={f.competence} onChange={(e) => setF({ ...f, competence: e.target.value })} aria-label="Competência" />
+        <Select value={f.status} onChange={(v) => setF({ ...f, status: v })} placeholder="Todos os status" options={[
+          { value: 'ABERTA', label: 'Abertas' }, { value: 'EM_MULTA', label: 'Abertas em multa' }, { value: 'IMPEDIMENTO', label: 'Impedimento' },
+          { value: 'CONCLUIDO', label: 'Concluídas' }, { value: 'DISPENSADO', label: 'Desconsideradas' },
+        ]} />
         <Select value={f.departmentId} onChange={(v) => setF({ ...f, departmentId: v })} placeholder="Todos os setores" options={(deps ?? []).map((d) => ({ value: d.id, label: d.name }))} />
         <Select value={f.assigneeId} onChange={(v) => setF({ ...f, assigneeId: v })} placeholder="Todos os responsáveis" options={(users ?? []).map((u) => ({ value: u.id, label: u.name }))} />
         <div className="ml-auto flex gap-2">
           <Button variant="secondary" size="sm" disabled={!sel.size} onClick={() => setBulk({ assigneeIds: [], dueDate: '' })}>Editar {sel.size || ''} em lote</Button>
-          <Button size="sm" disabled={!sel.size || busy} onClick={() => run(async () => { const r = await apiPost('/tasks/processes/send-documents', { processIds: [...sel] }); reload(); return r; }, 'Documentos finalizados enviados aos clientes.')}><Send size={14} /> Enviar documentos</Button>
         </div>
       </div>
-      {!data ? <Loading /> : data.length === 0 ? <div className="p-6"><Empty title="Nenhum processo neste filtro">Os processos são gerados automaticamente pelos modelos no dia 1 de cada mês.</Empty></div> : (
+      {!data ? <Loading /> : data.length === 0 ? <div className="p-6"><Empty title="Nenhuma tarefa neste filtro">As tarefas são geradas automaticamente pelos modelos conforme o prazo de cada obrigação.</Empty></div> : (
         <div className="divide-y divide-slate-100">
           {data.map((p) => {
             const done = p.tasks.filter((t: any) => t.done).length;
-            const isOpen = open.has(p.id);
+            const popTotal = Array.isArray(p.popItems) ? p.popItems.length : 0;
+            const popDone = popTotal ? p.popItems.filter((i: any) => (p.popChecks ?? {})[i.id]).length : 0;
+            const files = (p._count?.files ?? 0) + p.tasks.reduce((a: number, t: any) => a + t.attachments.length, 0);
+            const open = ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA'].includes(p.status);
             return (
-              <div key={p.id}>
-                <div className="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50/60">
-                  <input type="checkbox" checked={sel.has(p.id)} onChange={() => toggle(sel, setSel, p.id)} />
-                  <button onClick={() => toggle(open, setOpen, p.id)} className="text-ink-muted">{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">{p.title} <span className="font-normal text-ink-muted">· {p.client.legalName}</span></div>
-                    <div className="text-xs text-ink-muted">Comp. {competence(p.competence)} · {done}/{p.tasks.length} etapas{Array.isArray(p.popItems) && p.popItems.length > 0 && <> · POP {Object.keys(p.popChecks ?? {}).filter((k) => p.popItems.some((i: any) => i.id === k)).length}/{p.popItems.length}</>} · {p.assigneeIds.map(uname).join(', ') || 'sem responsável'}{p.notifiedAt && <> · <span className="text-emerald-700">cliente avisado</span></>}</div>
+              <div key={p.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50/60">
+                <input type="checkbox" checked={sel.has(p.id)} onChange={() => toggle(p.id)} aria-label={`Selecionar ${p.title}`} />
+                <button className="min-w-0 flex-1 text-left" onClick={() => setCurrent(p.id)}>
+                  <div className="truncate text-sm font-medium">{p.title} <span className="font-normal text-ink-muted">· {p.client.legalName}</span></div>
+                  <div className="text-xs text-ink-muted">
+                    Comp. {competence(p.competence)} · {done}/{p.tasks.length} etapas
+                    {popTotal > 0 && <> · <span className={popDone === popTotal ? 'text-emerald-700' : 'text-amber-700'}>POP {popDone}/{popTotal}</span></>}
+                    {files > 0 && <> · 📎 {files}</>}
+                    {' · '}{p.assigneeIds.map(uname).join(', ') || 'sem responsável'}
+                    {p.status === 'IMPEDIMENTO' && p.impedimentReason && <> · <span className="text-red-700">{p.impedimentReason}</span></>}
+                    {p.notifiedAt && <> · <span className="text-emerald-700">enviado ao cliente</span></>}
                   </div>
-                  <div className={clsx('text-sm tabular-nums', p.status !== 'CONCLUIDO' && new Date(p.dueDate) < new Date() && 'font-semibold text-red-600')}>{date(p.dueDate)}</div>
-                  <StatusBadge status={p.status} />
-                  {!['CONCLUIDO', 'DISPENSADO'].includes(p.status) && <Button variant="ghost" size="sm" onClick={() => setDismiss({ p, reason: '' })}>Dispensar</Button>}
-                </div>
-                {isOpen && <ProcessDetail id={p.id} onChange={reload} />}
+                </button>
+                <div className={clsx('text-sm tabular-nums', open && new Date(p.dueDate) < new Date() && 'font-semibold text-red-600')}>{date(p.dueDate)}</div>
+                <StatusBadge status={p.status} />
+                <Button variant="ghost" size="sm" onClick={() => setCurrent(p.id)}>Abrir</Button>
               </div>
             );
           })}
         </div>
       )}
-      <Modal open={!!dismiss} title="Dispensar processo" onClose={() => setDismiss(null)} footer={<Button disabled={busy || (dismiss?.reason ?? '').length < 5} onClick={() => run(async () => { await apiPost(`/tasks/processes/${dismiss.p.id}/dismiss`, { reason: dismiss.reason }); setDismiss(null); reload(); }, 'Processo dispensado.')}>Dispensar</Button>}>
-        {dismiss && <Field label="Justificativa (obrigatória)"><textarea className="input" rows={3} value={dismiss.reason} onChange={(e) => setDismiss({ ...dismiss, reason: e.target.value })} placeholder="Ex.: cliente sem movimento no período" /></Field>}
-      </Modal>
-      <Modal open={!!bulk} title={`Editar ${sel.size} processos`} onClose={() => setBulk(null)} footer={<Button onClick={() => run(async () => { await apiPut('/tasks/processes/bulk', { ids: [...sel], assigneeIds: bulk.assigneeIds.length ? bulk.assigneeIds : undefined, dueDate: bulk.dueDate || undefined }); setBulk(null); setSel(new Set()); reload(); }, 'Processos atualizados.')}>Aplicar</Button>}>
+      {current && <TaskPanel id={current} onClose={() => setCurrent(null)} onChange={reload} />}
+      <Modal open={!!bulk} title={`Editar ${sel.size} tarefas`} onClose={() => setBulk(null)} footer={<Button disabled={busy} onClick={() => run(async () => { await apiPut('/tasks/processes/bulk', { ids: [...sel], assigneeIds: bulk.assigneeIds.length ? bulk.assigneeIds : undefined, dueDate: bulk.dueDate || undefined }); setBulk(null); setSel(new Set()); reload(); }, 'Tarefas atualizadas.')}>Aplicar</Button>}>
         {bulk && <>
           <Field label="Responsáveis"><div className="grid grid-cols-2 gap-1">{(users ?? []).map((u) => <label key={u.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={bulk.assigneeIds.includes(u.id)} onChange={(e) => setBulk({ ...bulk, assigneeIds: e.target.checked ? [...bulk.assigneeIds, u.id] : bulk.assigneeIds.filter((x: string) => x !== u.id) })} />{u.name}</label>)}</div></Field>
           <Field label="Novo prazo"><input type="date" className="input" value={bulk.dueDate} onChange={(e) => setBulk({ ...bulk, dueDate: e.target.value })} /></Field>
         </>}
       </Modal>
     </Card>
-  );
-}
-
-function ProcessDetail({ id, onChange }: { id: string; onChange: () => void }) {
-  const { data: p, reload } = useApi<any>(`/tasks/processes/${id}`);
-  const { data: users } = useApi<any[]>('/users');
-  const [comment, setComment] = useState('');
-  const { busy, run } = useAction();
-  if (!p) return <Loading />;
-  const refresh = () => { reload(); onChange(); };
-  const popItems: { id: string; text: string }[] = Array.isArray(p.popItems) ? p.popItems : [];
-  const checks: Record<string, { byName?: string; at: string }> = p.popChecks ?? {};
-  const popDone = popItems.filter((i) => checks[i.id]).length;
-  const popOk = popDone === popItems.length;
-  const closed = ['CONCLUIDO', 'DISPENSADO'].includes(p.status);
-  const pendingTasks = p.tasks.filter((t: any) => !t.done);
-  return (
-    <div className="grid gap-4 bg-slate-50/70 px-10 py-4 lg:grid-cols-[1fr_320px]">
-      <div className="space-y-3">
-      {popItems.length > 0 && (
-        <section className={clsx('rounded-md border bg-white p-3', popOk ? 'border-emerald-200' : 'border-amber-200')} aria-label="POP">
-          <div className="mb-2 flex items-center gap-2">
-            <ClipboardCheck size={16} className={popOk ? 'text-emerald-600' : 'text-amber-600'} />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-semibold">{p.popTitle ?? 'POP'}</div>
-              <div className="text-xs text-ink-muted">{popOk ? 'Todos os itens conferidos: pode concluir.' : `Marque todos os itens para liberar a conclusão (${popDone}/${popItems.length}).`}</div>
-            </div>
-            <div className="w-24"><div className="h-1.5 overflow-hidden rounded bg-slate-100"><div className={clsx('h-full transition-all', popOk ? 'bg-emerald-500' : 'bg-amber-500')} style={{ width: `${(popDone / popItems.length) * 100}%` }} /></div></div>
-          </div>
-          <ul className="space-y-1">
-            {popItems.map((i) => {
-              const c = checks[i.id];
-              return (
-                <li key={i.id}>
-                  <label className={clsx('flex cursor-pointer items-start gap-2 rounded px-1.5 py-1 text-sm hover:bg-slate-50', closed && 'cursor-default')}>
-                    <input type="checkbox" className="mt-0.5" disabled={closed || busy} checked={!!c} onChange={(e) => run(async () => { await apiPut(`/tasks/processes/${id}/pop/${i.id}`, { checked: e.target.checked }); refresh(); })} />
-                    <span className={clsx('flex-1', c && 'text-ink-muted')}>{i.text}{c && <span className="ml-1 text-[11px] text-ink-muted">· {c.byName?.split(' ')[0] ?? ''} {dateTime(c.at)}</span>}</span>
-                  </label>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
-      <ol className="space-y-2">
-        {p.tasks.map((t: any) => {
-          const lastOpen = pendingTasks.length === 1 && pendingTasks[0].id === t.id;
-          const popLock = lastOpen && !popOk;
-          return (
-          <li key={t.id} className={clsx('rounded-md border bg-white p-3', t.blocked && 'opacity-60')}>
-            <div className="flex items-center gap-3">
-              <button title={popLock ? 'Marque todos os itens do POP para concluir' : lastOpen ? 'Concluir (encerra o processo e avisa o cliente)' : 'Concluir etapa'} disabled={t.done || t.blocked || busy || popLock} onClick={() => run(() => apiPost<any>(`/tasks/tasks/${t.id}/complete`, {}).then((r) => { refresh(); return r; }), lastOpen ? 'Processo concluído. Cliente avisado por e-mail, WhatsApp e app.' : 'Etapa concluída.')} className={clsx('grid h-5 w-5 shrink-0 place-items-center rounded border', t.done ? 'border-brand-600 bg-brand-600 text-white' : popLock ? 'border-amber-300 bg-amber-50' : 'border-slate-300 hover:border-brand-500')}>{t.done && <Check size={13} />}{((t.blocked && !t.done) || popLock) && <Lock size={11} className={popLock ? 'text-amber-600' : 'text-ink-muted'} />}</button>
-              <div className="min-w-0 flex-1">
-                <div className={clsx('text-sm', t.done && 'text-ink-muted line-through')}>{t.order}. {t.title}</div>
-                <div className="text-xs text-ink-muted">prazo {date(t.dueDate)} · {label(t.priority)}{t.attachment !== 'OPCIONAL' && <> · <Badge tone="amber">{t.attachment === 'OBRIGATORIO_CONCLUIR_E_ENVIAR' ? 'anexo obrigatório + envio ao cliente' : 'anexo obrigatório'}</Badge></>}</div>
-              </div>
-              <label className="cursor-pointer text-xs text-brand-700 hover:underline"><Paperclip size={13} className="mr-1 inline" />Anexar<input type="file" multiple className="hidden" onChange={(e) => e.target.files && run(async () => { const f = await uploadFiles(e.target.files!, { withText: 'false' }); await apiPost(`/tasks/tasks/${t.id}/attachments`, { files: f }); reload(); }, 'Anexo adicionado.')} /></label>
-            </div>
-            {t.attachments.length > 0 && <ul className="ml-8 mt-2 space-y-0.5 text-xs">{t.attachments.map((a: any) => <li key={a.id}>📎 {a.fileName} {a.matchedByAi && <Badge tone="violet">IA</Badge>} {a.sentToClientAt && <span className="text-emerald-700">· enviado {dateTime(a.sentToClientAt)}</span>}</li>)}</ul>}
-            {popLock && <p className="ml-8 mt-1 text-xs text-amber-700">Bloqueada até conferir todo o POP acima.</p>}
-          </li>
-          );
-        })}
-      </ol>
-      {p.status === 'CONCLUIDO' && (
-        <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          <BellRing size={15} />
-          <span className="flex-1">{p.notifiedAt ? `Cliente avisado em ${dateTime(p.notifiedAt)} (e-mail, WhatsApp e app).` : 'Concluído sem aviso ao cliente (desligado neste modelo).'}</span>
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(async () => { await apiPost(`/tasks/processes/${id}/notify`, {}); refresh(); }, 'Aviso reenviado ao cliente.')}>{p.notifiedAt ? 'Reenviar aviso' : 'Avisar agora'}</Button>
-        </div>
-      )}
-      </div>
-      <div>
-        <div className="mb-2 text-xs font-semibold uppercase text-ink-muted">Comentários</div>
-        <div className="max-h-60 space-y-2 overflow-y-auto">{p.comments.map((c: any) => <div key={c.id} className="rounded-md bg-white p-2 text-sm"><span className="font-medium">{users?.find((u) => u.id === c.authorId)?.name ?? '—'}</span> <span className="text-[11px] text-ink-muted">{dateTime(c.at)}</span><div>{c.body}</div></div>)}</div>
-        <form className="mt-2 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (comment) run(async () => { await apiPost(`/tasks/processes/${id}/comments`, { body: comment }); setComment(''); reload(); }); }}><input className="input" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Comentar…" /><Button size="sm">OK</Button></form>
-        {p.dismissReason && <p className="mt-3 text-xs text-ink-muted">Dispensado: {p.dismissReason}</p>}
-      </div>
-    </div>
   );
 }
 

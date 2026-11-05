@@ -48,6 +48,7 @@ export default function RootLayout() {
         <Stack.Screen name="nfse" options={{ title: 'Emitir NFS-e' }} />
         <Stack.Screen name="relatorios" options={{ title: 'Relatórios de notas' }} />
         <Stack.Screen name="avisos" options={{ title: 'Avisos do escritório' }} />
+        <Stack.Screen name="entrega/[id]" options={{ title: 'Entrega do escritório' }} />
       </Stack>
       </MaybeAvisos>
     </SafeAreaProvider>

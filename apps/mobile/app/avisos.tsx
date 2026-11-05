@@ -34,7 +34,7 @@ export default function Avisos() {
           {items.map((a) => {
             const novo = !a.readAt;
             return (
-              <Pressable key={a.id} onPress={() => router.push('/documentos')} style={[s.row, novo && { backgroundColor: '#f0fdf9' }]} accessibilityLabel={`${novo ? 'Novo: ' : ''}${a.title}`}>
+              <Pressable key={a.id} onPress={() => router.push((a.link?.startsWith('/entrega/') ? a.link : '/documentos') as any)} style={[s.row, novo && { backgroundColor: '#f0fdf9' }]} accessibilityLabel={`${novo ? 'Novo: ' : ''}${a.title}`}>
                 <View style={[s.rowIcon, { backgroundColor: novo ? C.brand : C.brandSoft }]}>
                   <Ionicons name={ICON[a.kind] ?? 'notifications'} size={19} color={novo ? C.white : C.brand} />
                 </View>

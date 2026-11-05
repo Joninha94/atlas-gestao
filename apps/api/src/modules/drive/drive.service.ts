@@ -31,12 +31,12 @@ export class DriveService {
   }
 
   /** Garante a árvore de pastas de sistema (ex.: PGDAS/2026/10) e grava o arquivo nela. */
-  async saveSystemFile(tenantId: string, clientId: string, path: string[], name: string, key: string, size: number, mime: string) {
+  async saveSystemFile(tenantId: string, clientId: string, path: string[], name: string, key: string, size: number, mime: string, shared = false) {
     let parent = await this.prisma.folder.findFirst({ where: { tenantId, clientId, kind: 'CLIENTE_RAIZ' } });
     if (!parent) parent = await this.onClientCreated({ tenantId, clientId, regime: '' });
     for (const segment of path) {
       const existing: typeof parent | null = await this.prisma.folder.findFirst({ where: { tenantId, clientId, parentId: parent!.id, name: segment, deletedAt: null } });
-      parent = existing ?? (await this.prisma.folder.create({ data: { tenantId, clientId, parentId: parent!.id, kind: 'SISTEMA', name: segment } }));
+      parent = existing ?? (await this.prisma.folder.create({ data: { tenantId, clientId, parentId: parent!.id, kind: 'SISTEMA', name: segment, sharedWithClient: shared } }));
     }
     return this.prisma.file.create({ data: { folderId: parent!.id, name: safeFileName(name), key, size, mime, uploadedBy: 'system' } });
   }

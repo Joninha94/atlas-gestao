@@ -328,21 +328,21 @@ export class TaskConfigController {
     return this.config.setProcessPop(u.tenantId, pid, b?.popId ?? null);
   }
 
-  /** Concluir o processo inteiro (todas as etapas já feitas). Passa pela trava do POP e dispara o aviso. */
+  /** Concluir e enviar: POP completo → nota de envio com os arquivos para o cliente (mensagem opcional). */
   @Post('processes/:id/conclude')
-  async conclude(@CurrentUser() u: AuthUser, @Param('id') pid: string) {
-    const p = await this.prisma.process.findFirstOrThrow({ where: { id: pid, tenantId: u.tenantId }, include: { tasks: true } });
-    if (p.status === 'CONCLUIDO') throw new BadRequestException('Processo já concluído.');
-    const pend = p.tasks.filter((t) => !t.done);
-    if (pend.length) throw new BadRequestException(`Conclua as etapas antes: ${pend.map((t) => t.title).slice(0, 3).join('; ')}`);
-    return this.tasks.concludeProcess(u.tenantId, u.sub, pid);
+  conclude(@CurrentUser() u: AuthUser, @Param('id') pid: string, @Body() b: { message?: string; notify?: boolean }) {
+    const message = typeof b?.message === 'string' ? b.message.slice(0, 2000) : undefined;
+    return this.tasks.concludeProcess(u.tenantId, u.sub, pid, b?.notify === false ? false : undefined, { message, userName: u.name });
   }
 
-  /** Reenviar o aviso de conclusão (ex.: cliente trocou o e-mail). */
+  /** Reenviar ao cliente (gera nova nota de envio com os arquivos ainda não entregues). */
   @Post('processes/:id/notify')
-  async renotify(@CurrentUser() u: AuthUser, @Param('id') pid: string) {
-    await this.prisma.process.updateMany({ where: { id: pid, tenantId: u.tenantId, status: 'CONCLUIDO' }, data: { notifiedAt: null } });
-    return this.config.notifyCompletion(u.tenantId, pid);
+  async renotify(@CurrentUser() u: AuthUser, @Param('id') pid: string, @Body() b: { message?: string }) {
+    await this.prisma.process.findFirstOrThrow({ where: { id: pid, tenantId: u.tenantId, status: 'CONCLUIDO' } });
+    await this.prisma.process.update({ where: { id: pid }, data: { notifiedAt: null } });
+    await this.prisma.processFile.updateMany({ where: { processId: pid }, data: { sentAt: null } });
+    await this.prisma.taskAttachment.updateMany({ where: { task: { processId: pid } }, data: { sentToClientAt: null } });
+    return this.config.deliver(u.tenantId, pid, { userId: u.sub, userName: u.name, message: b?.message ?? null });
   }
 
   // ----------------------------------------------------------------- fluxos

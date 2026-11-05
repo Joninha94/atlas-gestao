@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { promises as dns } from 'node:dns';
-import { auditEmailDomain, popProgress, renderTemplate, splitEmails, type PopChecks, type PopItem } from '@produtiva/core';
+import { auditEmailDomain, formatDocumento, popProgress, renderTemplate, splitEmails, type PopChecks, type PopItem } from '@produtiva/core';
+import { documentoLivrePdf } from '../../integrations/declaracoes/documento-livre';
+import { DriveService } from '../drive/drive.service';
 import { padroesTarefas } from '@produtiva/db';
 import { PrismaService } from '../../common/prisma.service';
 import { MailerService } from '../../integrations/mail/mailer.service';
@@ -24,6 +26,7 @@ export class TaskConfigService {
     private readonly whatsapp: WhatsappService,
     private readonly notifications: NotificationsService,
     private readonly storage: StorageService,
+    private readonly drive: DriveService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -95,7 +98,7 @@ export class TaskConfigService {
   /** Marca/desmarca um item do POP. Pode ir e voltar quantas vezes quiser enquanto a tarefa não for concluída. */
   async checkPop(tenantId: string, user: { sub: string; name: string }, processId: string, itemId: string, checked: boolean) {
     const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
-    if (p.status === 'CONCLUIDO' || p.status === 'DISPENSADO') throw new BadRequestException('Processo já encerrado: o POP não pode mais ser alterado.');
+    if (['CONCLUIDO', 'DISPENSADO'].includes(p.status)) throw new BadRequestException('Tarefa encerrada: reabra a tarefa para alterar o POP.');
     const items = (p.popItems as PopItem[] | null) ?? [];
     if (!items.some((i) => i.id === itemId)) throw new BadRequestException('Item não pertence ao POP desta tarefa.');
     const checks: PopChecks = { ...((p.popChecks as PopChecks | null) ?? {}) };
@@ -141,68 +144,125 @@ export class TaskConfigService {
     return global ? { subject: global.subject ?? null, body: global.body } : null;
   }
 
-  /** Envia o aviso "tarefa concluída" e devolve quantos envios deram certo por canal. */
-  async notifyCompletion(tenantId: string, processId: string) {
+  /**
+   * Conclusão → nota de envio (protocolo de entrega nº N): arquivos da tarefa vão para o Drive do cliente
+   * (pasta compartilhada "Entregas MM-AAAA"), saem por e-mail (todos os e-mails), WhatsApp e app, e o
+   * protocolo em PDF no papel timbrado registra o que foi entregue, para quem e por onde.
+   */
+  async deliver(tenantId: string, processId: string, opts: { userId?: string; userName?: string; message?: string | null } = {}) {
     const p = await this.prisma.process.findFirstOrThrow({
       where: { id: processId, tenantId },
-      include: { client: { include: { contacts: true } }, tasks: { include: { attachments: true } } },
+      include: { client: { include: { contacts: true } }, tasks: { include: { attachments: true } }, files: true },
     });
     if (p.notifiedAt) return { skipped: 'já avisado' };
     const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } });
-    const files = p.tasks.flatMap((t) => t.attachments);
-    const links = await Promise.all(files.map(async (a) => ({ name: a.fileName, url: await this.storage.signedUrl(a.fileKey, 7 * 86_400, a.fileName).catch(() => '') })));
+    const stepFiles = p.tasks.flatMap((t) => t.attachments).filter((a) => !a.sentToClientAt);
+    const files = [
+      ...p.files.filter((f) => !f.sentAt).map((f) => ({ name: f.fileName, key: f.fileKey, size: f.size, mime: f.mime })),
+      ...stepFiles.map((a) => ({ name: a.fileName, key: a.fileKey, size: 0, mime: null as string | null })),
+    ];
     const [y, m] = p.competence.split('-');
-    const appLink = `${process.env.PUBLIC_APP_URL ?? process.env.WEB_ORIGIN?.split(',')[0] ?? ''}/avisos`;
-    const base = {
-      cliente: p.client.tradeName ?? p.client.legalName, tarefa: p.title, competencia: m ? `${m}/${y}` : p.competence,
-      vencimento: p.dueDate.toLocaleDateString('pt-BR', { timeZone: 'UTC' }), escritorio: tenant.emailFromName ?? tenant.name, link: appLink,
-    };
-    const sent = { EMAIL: 0, WHATSAPP: 0, APP: 0 };
-    const errors: string[] = [];
+    const comp = m ? `${m}/${y}` : p.competence;
+
+    // Número sequencial do protocolo por escritório
+    const last = await this.prisma.deliveryNote.aggregate({ where: { tenantId }, _max: { number: true } });
+    const number = (last._max.number ?? 0) + 1;
+    const note = await this.prisma.deliveryNote.create({
+      data: { tenantId, clientId: p.clientId, processId, number, message: opts.message?.trim() || null, files: files.map(({ name, key }) => ({ name, key })), recipients: [], createdById: opts.userId ?? null },
+    });
+    const nro = String(number).padStart(6, '0');
+
+    // Arquivos no Drive do cliente (pasta compartilhada com o app)
+    for (const f of files) {
+      await this.drive.saveSystemFile(tenantId, p.clientId, [`Entregas ${m ?? ''}-${y ?? ''}`.trim()], f.name, f.key, f.size, f.mime ?? 'application/octet-stream', true).catch((e) => this.log.warn(`Drive: ${e.message}`));
+    }
 
     const [mail, wa, app] = await Promise.all([this.message(tenantId, 'TAREFA_CONCLUIDA', 'EMAIL'), this.message(tenantId, 'TAREFA_CONCLUIDA', 'WHATSAPP'), this.message(tenantId, 'TAREFA_CONCLUIDA', 'APP')]);
     const contacts = p.client.contacts;
-
+    const planned: { channel: Channel; to: string; name: string; contactId: string; ok?: boolean; error?: string }[] = [];
     for (const c of contacts) {
+      if (mail && c.receives.includes('EMAIL')) for (const to of splitEmails(c.email)) planned.push({ channel: 'EMAIL', to, name: c.name, contactId: c.id });
+      if (wa && c.phone && c.receives.includes('WHATSAPP')) planned.push({ channel: 'WHATSAPP', to: c.phone, name: c.name, contactId: c.id });
+      if (app && c.appLogin && c.receives.includes('APP')) planned.push({ channel: 'APP', to: c.id, name: c.name, contactId: c.id });
+    }
+
+    // Protocolo em PDF (papel timbrado)
+    const logo = tenant.logoKey ? await this.storage.get(tenant.logoKey).catch(() => null) : null;
+    const when = new Date().toLocaleString('pt-BR', { timeZone: 'America/Maceio', dateStyle: 'short', timeStyle: 'short' });
+    const canal: Record<Channel, string> = { EMAIL: 'E-mail', WHATSAPP: 'WhatsApp', APP: 'Aplicativo' };
+    const corpo = [
+      `Cliente: ${p.client.legalName} (${formatDocumento(p.client.document)})`,
+      `Tarefa: ${p.title}`,
+      `Competência: ${comp}`,
+      `Concluída por: ${opts.userName ?? 'Sistema'} em ${when}`,
+      '',
+      ...(note.message ? ['Mensagem do escritório:', note.message, ''] : []),
+      `Documentos entregues (${files.length}):`,
+      ...(files.length ? files.map((f, i) => `${i + 1}. ${f.name}`) : ['Nenhum arquivo anexado (aviso de conclusão).']),
+      '',
+      'Enviado para:',
+      ...(planned.length ? planned.map((r) => `• ${canal[r.channel]}: ${r.channel === 'APP' ? r.name : r.to}`) : ['Nenhum contato cadastrado para receber.']),
+      '',
+      'Os documentos também ficam disponíveis no aplicativo do cliente, na pasta de entregas.',
+    ].join('\n');
+    const pdf = await documentoLivrePdf(tenant, logo, { titulo: `Protocolo de entrega de documentos nº ${nro}`, corpo, assinatura: false });
+    const pdfKey = this.storage.key(tenantId, 'entregas', `${note.id}.pdf`);
+    await this.storage.put(pdfKey, pdf, 'application/pdf');
+    const protocolUrl = await this.storage.signedUrl(pdfKey, 30 * 86_400, `Protocolo_${nro}.pdf`).catch(() => '');
+    const links = await Promise.all(files.map(async (f) => ({ name: f.name, url: await this.storage.signedUrl(f.key, 30 * 86_400, f.name).catch(() => '') })));
+
+    const appLink = `${process.env.PUBLIC_APP_URL ?? process.env.WEB_ORIGIN?.split(',').pop() ?? ''}/entrega/${note.id}`;
+    const base = {
+      cliente: p.client.tradeName ?? p.client.legalName, tarefa: p.title, competencia: comp, protocolo: nro,
+      vencimento: p.dueDate.toLocaleDateString('pt-BR', { timeZone: 'UTC' }), escritorio: tenant.emailFromName ?? tenant.name, link: appLink,
+      mensagem: note.message ?? '',
+    };
+    // Mensagem do colaborador entra logo depois da saudação (ou onde o modelo tiver {{mensagem}})
+    const withMsg = (body: string) => {
+      if (!note.message || body.includes('{{mensagem}}')) return body;
+      const i = body.indexOf('\n');
+      return i < 0 ? `${body}\n${note.message}` : `${body.slice(0, i)}\n\n${note.message}${body.slice(i)}`;
+    };
+
+    for (const r of planned) {
+      const c = contacts.find((x) => x.id === r.contactId)!;
       const vars = { ...base, contato: c.name.split(' ')[0] };
-      if (mail && c.receives.includes('EMAIL')) {
-        for (const to of splitEmails(c.email)) {
-          try {
-            const anexos = links.length ? `\nDocumentos:\n${links.map((l) => `• ${l.name}`).join('\n')}\n` : '';
-            const text = renderTemplate(mail.body, { ...vars, anexos });
-            const html = text.split('\n').map((l) => (l ? `<p style="margin:0 0 8px">${esc(l)}</p>` : '')).join('')
-              + (links.length ? `<ul>${links.map((l) => `<li><a href="${l.url}">${esc(l.name)}</a></li>`).join('')}</ul>` : '');
-            await this.mailer.sendForTenant(tenantId, { to, subject: renderTemplate(mail.subject ?? '{{tarefa}} concluída', vars), html });
-            sent.EMAIL++;
-          } catch (e) { errors.push(`e-mail ${to}: ${(e as Error).message}`); }
-        }
-      }
-      if (wa && c.phone && c.receives.includes('WHATSAPP')) {
-        try {
+      try {
+        if (r.channel === 'EMAIL') {
+          const anexos = links.length ? `\nDocumentos:\n${links.map((l) => `• ${l.name}`).join('\n')}\n` : '';
+          const text = renderTemplate(withMsg(mail!.body), { ...vars, anexos });
+          const html = text.split('\n').map((l) => (l ? `<p style="margin:0 0 8px">${esc(l)}</p>` : '')).join('')
+            + (links.length ? `<ul>${links.map((l) => `<li><a href="${l.url}">${esc(l.name)}</a></li>`).join('')}</ul>` : '')
+            + `<p style="margin-top:12px;font-size:12px;color:#64748b">Protocolo de entrega nº ${nro} — <a href="${protocolUrl}">ver protocolo</a></p>`;
+          await this.mailer.sendForTenant(tenantId, { to: r.to, subject: renderTemplate(mail!.subject ?? '{{tarefa}} concluída', vars), html });
+        } else if (r.channel === 'WHATSAPP') {
           const anexos = links.length ? `\n📎 ${links.map((l) => l.name).join(', ')}` : '';
           const provider = await this.whatsapp.forTenant(tenantId);
-          await provider.sendText(c.phone, renderTemplate(wa.body, { ...vars, anexos }));
-          for (const l of links) if (l.url) await provider.sendDocument(c.phone, l.url, l.name);
-          sent.WHATSAPP++;
-        } catch (e) { errors.push(`WhatsApp ${c.phone}: ${(e as Error).message}`); }
-      }
+          await provider.sendText(r.to, `${renderTemplate(withMsg(wa!.body), { ...vars, anexos })}\nProtocolo nº ${nro}`);
+          for (const l of links) if (l.url) await provider.sendDocument(r.to, l.url, l.name);
+        } else {
+          await this.notifications.pushToContact(r.to, renderTemplate(app!.subject ?? '{{tarefa}} concluída', base), renderTemplate(app!.body, base), { kind: 'TAREFA_CONCLUIDA', deliveryId: note.id });
+        }
+        r.ok = true;
+      } catch (e) { r.ok = false; r.error = (e as Error).message.slice(0, 300); }
     }
-
-    // App: um aviso por empresa (aparece para todos os contatos com acesso) + push nos celulares
     if (app) {
-      const title = renderTemplate(app.subject ?? '{{tarefa}} concluída', base);
-      const body = renderTemplate(app.body, base);
-      await this.prisma.clientNotification.create({ data: { tenantId, clientId: p.clientId, kind: 'TAREFA_CONCLUIDA', title, body, link: `/avisos?processo=${p.id}` } });
-      for (const c of contacts.filter((x) => x.appLogin && x.receives.includes('APP'))) {
-        await this.notifications.pushToContact(c.id, title, body, { kind: 'TAREFA_CONCLUIDA', processId: p.id }).then(() => sent.APP++).catch((e) => errors.push(`app ${c.name}: ${e.message}`));
-      }
+      await this.prisma.clientNotification.create({
+        data: { tenantId, clientId: p.clientId, kind: 'TAREFA_CONCLUIDA', title: renderTemplate(app.subject ?? '{{tarefa}} concluída', base), body: renderTemplate(app.body, base), link: `/entrega/${note.id}` },
+      });
     }
 
-    await this.prisma.taskAttachment.updateMany({ where: { id: { in: files.map((f) => f.id) }, sentToClientAt: null }, data: { sentToClientAt: new Date() } });
-    await this.prisma.process.update({ where: { id: p.id }, data: { notifiedAt: new Date() } });
-    await this.prisma.auditLog.create({ data: { tenantId, clientId: p.clientId, action: 'tarefa.aviso_cliente', entity: 'Process', entityId: p.id, meta: { sent, errors } } });
-    if (errors.length) this.log.warn(`Aviso de conclusão ${p.id}: ${errors.join(' | ')}`);
-    return { sent, errors };
+    const now = new Date();
+    await this.prisma.processFile.updateMany({ where: { processId, sentAt: null }, data: { sentAt: now, deliveryId: note.id } });
+    await this.prisma.taskAttachment.updateMany({ where: { id: { in: stepFiles.map((f) => f.id) } }, data: { sentToClientAt: now } });
+    await this.prisma.deliveryNote.update({ where: { id: note.id }, data: { pdfKey, recipients: planned } });
+    await this.prisma.process.update({ where: { id: p.id }, data: { notifiedAt: now } });
+    await this.prisma.auditLog.create({ data: { tenantId, userId: opts.userId, clientId: p.clientId, action: 'tarefa.nota_envio', entity: 'DeliveryNote', entityId: note.id, meta: { number, files: files.length, ok: planned.filter((r) => r.ok).length, erros: planned.filter((r) => r.ok === false).length } } });
+    const sent = { EMAIL: 0, WHATSAPP: 0, APP: 0 };
+    for (const r of planned) if (r.ok) sent[r.channel]++;
+    const errors = planned.filter((r) => !r.ok).map((r) => `${canal[r.channel]} ${r.to}: ${r.error}`);
+    if (errors.length) this.log.warn(`Nota de envio ${nro}: ${errors.join(' | ')}`);
+    return { deliveryId: note.id, number, sent, errors, files: files.length };
   }
 
   // ---------------------------------------------------------------------------

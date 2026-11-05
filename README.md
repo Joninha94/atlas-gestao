@@ -103,7 +103,7 @@ apps/
   agent/      agente.mjs · instalar.ps1 (Agendador de Tarefas do Windows) · scripts/build-exe.mjs
 packages/
   core/       documents, simples, dctfweb, schedule, recurrence, communication, reforma, drive, xml, cnpjws, tarefas
-  db/         prisma/schema.prisma, migrations (0001–0006), roles.sql, rls.sql, seed.ts, obrigacoes.ts (catálogo), src/padroes-tarefas.ts (POPs, mensagens, quadro, fluxos)
+  db/         prisma/schema.prisma, migrations (0001–0007), roles.sql, rls.sql, seed.ts, obrigacoes.ts (catálogo), src/padroes-tarefas.ts (POPs, mensagens, quadro, fluxos)
 docker/       api, web, rpa, mobile-web Dockerfiles
 ```
 
@@ -125,6 +125,8 @@ docker/       api, web, rpa, mobile-web Dockerfiles
 | **Obrigações por cliente** — o padrão vem do regime/UF; o time ativa as opcionais (IPI, DIMOB, DMED, VT…) e desliga o que não se aplica; ativar já cria a tarefa do mês | `TasksService.clientObligations/setClientObligation` · `PUT /tasks/clients/:id/obligations/:templateId` | Clientes → Obrigações |
 | **Tarefas → Configurar** — hub com Dados da empresa (regimes, agrupadores de clientes e de tarefas, horários de acesso, geração), recorrentes, solicitações de serviço, fluxos, templates de documentos, usuários (funcionários e do app), responsabilidades em lote, adequação de agrupadores, templates de envio, endereço customizado e auditoria do domínio (SPF/DKIM/DMARC/MX) | `task-config.controller.ts` · `task-config.service.ts` · `core/tarefas.ts` | Tarefas → Configurar |
 | **POP na tarefa** — checklist copiado do modelo para o processo; marca/desmarca com autor e hora; a última etapa (e a coluna Concluído do quadro) só fecha com todos os itens marcados | `PUT /tasks/processes/:id/pop/:itemId` · `assertPopComplete` | Tarefas → Processos (detalhe) |
+| **Tela da tarefa** — arquivos para entregar (colocar/tirar), POP logo abaixo, etapas marcar/desmarcar; status **Aberta → Concluída** (envia ao cliente) / **Impedimento** (motivo, avisa o escritório) / **Desconsiderada** (motivo) → **Reabrir**; histórico na própria tarefa | `TasksService.concludeProcess/setImpediment/dismiss/reopen/addFiles/removeFile` | Tarefas → Processos / Quadro (abrir tarefa) |
+| **Nota de envio (protocolo de entrega)** — numerada por escritório, PDF no papel timbrado com arquivos, mensagem e destinatários; arquivos vão para o Drive do cliente (pasta Entregas, visível no app); escritório vê quando o cliente abriu | `TaskConfigService.deliver` · `GET /app/deliveries/:id` | Tarefa → Notas de envio · App → Entrega |
 | **Aviso de conclusão ao cliente** — todos os e-mails do contato (separados por `;`), WhatsApp com os anexos, aviso no app + push; modelos editáveis por canal; reenviar aviso | `TaskConfigService.notifyCompletion` · `GET /app/notifications` | Configurar → Templates de envio · App → sino/Avisos (banner estilo WhatsApp) |
 | **Quadro (Kanban) e fluxos encadeados** — colunas do escritório; ao concluir um passo do fluxo, o próximo nasce para o responsável | `TasksService.board/moveStage/advanceFlow` | Tarefas → Quadro · Configurar → Fluxo de tarefas |
 | Ordens de serviço — cliente preenche no app → processo para o responsável | `ClientAppService.submitServiceForm` | App → Solicitar serviço / Tarefas → Formulários |

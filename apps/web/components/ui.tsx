@@ -61,7 +61,7 @@ const STATUS_TONE: Record<string, keyof typeof TONES> = {
   PAGA: 'green', ENTREGUE: 'green', CONCLUIDO: 'green', NEGATIVA: 'green', ENCERRADA: 'slate',
   VISUALIZADA: 'violet', ENVIADA: 'blue', EM_PROGRESSO: 'blue', EM_ATENDIMENTO: 'blue',
   PENDENTE: 'amber', A_FAZER: 'amber', AGUARDANDO: 'amber', NA_URA: 'amber', POSITIVA_COM_EFEITO_NEGATIVA: 'amber', ATENCAO: 'amber',
-  VENCIDA: 'red', AUSENTE: 'red', EM_MULTA: 'red', POSITIVA: 'red', ERRO: 'red', ACIMA_SUBLIMITE: 'red', ACIMA_LIMITE: 'red',
+  VENCIDA: 'red', AUSENTE: 'red', EM_MULTA: 'red', IMPEDIMENTO: 'red', POSITIVA: 'red', ERRO: 'red', ACIMA_SUBLIMITE: 'red', ACIMA_LIMITE: 'red',
   CANCELADA: 'slate', DISPENSADO: 'slate', INDISPONIVEL: 'slate', OK: 'green',
 };
 

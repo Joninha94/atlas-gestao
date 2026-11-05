@@ -157,6 +157,30 @@ export class ClientAppController {
     return { items, unread };
   }
 
+  /** Entregas do escritório (nota de envio): mensagem, arquivos e protocolo. Abrir marca como visualizado. */
+  @ClientRoute()
+  @Get('deliveries')
+  async deliveries(@CurrentUser() u: AuthUser) {
+    const rows = await this.prisma.deliveryNote.findMany({ where: { clientId: u.clientId! }, orderBy: { createdAt: 'desc' }, take: 100, include: { process: { select: { title: true, competence: true } } } });
+    return rows.map((d) => ({ id: d.id, number: d.number, title: d.process.title, competence: d.process.competence, createdAt: d.createdAt, viewedAt: d.viewedAt, files: (d.files as any[]).length }));
+  }
+
+  @ClientRoute()
+  @Get('deliveries/:id')
+  async delivery(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    const d = await this.prisma.deliveryNote.findFirstOrThrow({ where: { id, clientId: u.clientId! }, include: { process: { select: { title: true, competence: true, completedAt: true } } } });
+    if (!d.viewedAt) {
+      await this.prisma.deliveryNote.update({ where: { id }, data: { viewedAt: new Date() } });
+      await this.prisma.auditLog.create({ data: { tenantId: d.tenantId, clientId: d.clientId, action: 'entrega.visualizada', entity: 'DeliveryNote', entityId: id, meta: { contactId: u.sub } } });
+    }
+    const nro = String(d.number).padStart(6, '0');
+    return {
+      id: d.id, number: nro, title: d.process.title, competence: d.process.competence, message: d.message, createdAt: d.createdAt,
+      protocolUrl: d.pdfKey ? await this.storage.signedUrl(d.pdfKey, 600, `Protocolo_${nro}.pdf`) : null,
+      files: await Promise.all((d.files as { name: string; key: string }[]).map(async (f) => ({ name: f.name, url: await this.storage.signedUrl(f.key, 600, f.name) }))),
+    };
+  }
+
   @ClientRoute()
   @Post('notifications/read')
   async readNotifications(@CurrentUser() u: AuthUser, @Body() b: { ids?: string[] }) {

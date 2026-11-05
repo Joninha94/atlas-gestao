@@ -197,8 +197,9 @@ enum ProcessStatus {
   A_FAZER
   EM_PROGRESSO
   CONCLUIDO
-  DISPENSADO
+  DISPENSADO   // "Desconsiderada" (motivo obrigatório)
   EM_MULTA
+  IMPEDIMENTO  // não dá para fazer agora (motivo obrigatório); reabre quando resolver
 }
 
 enum Priority {
@@ -977,6 +978,13 @@ model Process {
   flowId       String?         // fluxo de tarefas encadeadas
   flowStep     Int?
   notifiedAt   DateTime?       // aviso de conclusão enviado ao cliente
+  impedimentReason String?
+  impedimentAt     DateTime?
+  impedimentById   String?
+  dismissedAt      DateTime?
+  dismissedById    String?
+  files        ProcessFile[]   // arquivos que serão entregues ao cliente
+  deliveries   DeliveryNote[]
   comments     TaskComment[]
 
   @@unique([templateId, clientId, competence])
@@ -1231,4 +1239,41 @@ model ClientNotification {
   createdAt DateTime  @default(now())
 
   @@index([clientId, readAt])
+}
+
+/** Arquivo anexado na tarefa para entregar ao cliente. Pode ser removido até ser enviado. */
+model ProcessFile {
+  id           String    @id @default(uuid())
+  processId    String
+  process      Process   @relation(fields: [processId], references: [id], onDelete: Cascade)
+  fileKey      String
+  fileName     String
+  size         Int       @default(0)
+  mime         String?
+  uploadedById String?
+  createdAt    DateTime  @default(now())
+  sentAt       DateTime?
+  deliveryId   String?
+
+  @@index([processId])
+}
+
+/** Nota de envio (protocolo de entrega): o que foi entregue, para quem, por onde e quando o cliente viu. */
+model DeliveryNote {
+  id          String    @id @default(uuid())
+  tenantId    String
+  clientId    String
+  processId   String
+  process     Process   @relation(fields: [processId], references: [id], onDelete: Cascade)
+  number      Int
+  message     String?
+  files       Json      // [{name, key}]
+  recipients  Json      // [{channel, to, ok, error?}]
+  pdfKey      String?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  viewedAt    DateTime?
+
+  @@unique([tenantId, number])
+  @@index([clientId, createdAt])
 }

@@ -6,9 +6,11 @@ import { z } from 'zod';
 import { AuthUser, CurrentUser, PERMISSIONS, RequirePermission } from '../../common/auth';
 import { PrismaService } from '../../common/prisma.service';
 import { AiGatewayService } from '../../integrations/ai/ai-gateway.service';
+import { StorageService } from '../../integrations/storage/storage.service';
 import { describeDeadline, TasksService } from './tasks.service';
 import { TaskConfigController } from './task-config.controller';
 import { TaskConfigService } from './task-config.service';
+import { DriveModule } from '../drive/drive.module';
 
 const StepSchema = z.object({
   order: z.number().int(),
@@ -45,7 +47,7 @@ const TemplateSchema = z.object({
 
 @Controller('tasks')
 export class TasksController {
-  constructor(private readonly tasks: TasksService, private readonly prisma: PrismaService, private readonly ai: AiGatewayService) {}
+  constructor(private readonly tasks: TasksService, private readonly prisma: PrismaService, private readonly ai: AiGatewayService, private readonly storage: StorageService) {}
 
   @Get('dashboard')
   dashboard(@CurrentUser() u: AuthUser) {
@@ -69,12 +71,12 @@ export class TasksController {
       where: {
         tenantId: u.tenantId,
         client: { active: true },
-        status: status as any,
+        status: status === 'ABERTA' ? { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA'] } : (status as any),
         competence,
         ...(departmentId ? { departmentIds: { has: departmentId } } : {}),
         ...(assigneeId ? { assigneeIds: { has: assigneeId } } : {}),
       },
-      include: { client: { select: { legalName: true } }, tasks: { include: { attachments: true } } },
+      include: { client: { select: { legalName: true } }, tasks: { include: { attachments: true } }, _count: { select: { files: true } } },
       orderBy: { dueDate: 'asc' },
       take: 1000,
     });
@@ -136,10 +138,49 @@ export class TasksController {
     return this.tasks.completeTask(u.tenantId, u.sub, id, !!b?.sendToClient);
   }
 
+  @Post('tasks/:id/uncomplete')
+  uncomplete(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.tasks.uncompleteTask(u.tenantId, u.sub, id);
+  }
+
+  /** Desconsiderar (motivo obrigatório). Qualquer colaborador pode, sempre com o motivo registrado. */
   @Post('processes/:id/dismiss')
-  @RequirePermission(PERMISSIONS.TASKS_DISMISS)
   dismiss(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() b: { reason: string }) {
-    return this.tasks.dismiss(u.tenantId, u.sub, id, b.reason);
+    return this.tasks.dismiss(u.tenantId, u.sub, id, b?.reason);
+  }
+
+  /** Impedimento (motivo obrigatório). */
+  @Post('processes/:id/impediment')
+  impediment(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() b: { reason: string }) {
+    return this.tasks.setImpediment(u.tenantId, u.sub, id, b?.reason);
+  }
+
+  @Post('processes/:id/reopen')
+  reopen(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() b: { reason?: string }) {
+    return this.tasks.reopen(u.tenantId, u.sub, id, b?.reason);
+  }
+
+  /** Arquivos que serão entregues ao cliente (já enviados por POST /files). */
+  @Post('processes/:id/files')
+  addFiles(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() b: { files: { fileKey: string; fileName: string; size?: number; mime?: string }[] }) {
+    return this.tasks.addFiles(u.tenantId, u.sub, id, b?.files ?? []);
+  }
+
+  @Delete('processes/:id/files/:fileId')
+  removeFile(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('fileId') fileId: string) {
+    return this.tasks.removeFile(u.tenantId, u.sub, id, fileId);
+  }
+
+  @Get('processes/:id/files/:fileId/url')
+  async fileUrl(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('fileId') fileId: string) {
+    const f = await this.prisma.processFile.findFirstOrThrow({ where: { id: fileId, processId: id, process: { tenantId: u.tenantId } } });
+    return { url: await this.storage.signedUrl(f.fileKey, 300, f.fileName) };
+  }
+
+  @Get('processes/:id/deliveries/:deliveryId/pdf')
+  async deliveryPdf(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('deliveryId') did: string) {
+    const d = await this.prisma.deliveryNote.findFirstOrThrow({ where: { id: did, processId: id, tenantId: u.tenantId } });
+    return { url: d.pdfKey ? await this.storage.signedUrl(d.pdfKey, 300, `Protocolo_${String(d.number).padStart(6, '0')}.pdf`) : null };
   }
 
   @Put('processes/bulk')
@@ -190,7 +231,11 @@ export class TasksController {
   process(@Param('id') id: string) {
     return this.prisma.process.findFirstOrThrow({
       where: { id },
-      include: { client: { select: { legalName: true, document: true } }, tasks: { include: { attachments: true }, orderBy: { order: 'asc' } }, comments: { orderBy: { at: 'asc' } } },
+      include: {
+        client: { select: { legalName: true, tradeName: true, document: true, contacts: { select: { id: true, name: true, email: true, phone: true, receives: true, appLogin: true } } } },
+        tasks: { include: { attachments: true }, orderBy: { order: 'asc' } }, comments: { orderBy: { at: 'asc' } },
+        files: { orderBy: { createdAt: 'asc' } }, deliveries: { orderBy: { createdAt: 'desc' } },
+      },
     });
   }
 
@@ -263,6 +308,7 @@ export class TasksController {
 }
 
 @Module({
+  imports: [DriveModule],
   controllers: [TasksController, TaskConfigController],
   providers: [TasksService, TaskConfigService],
   exports: [TasksService, TaskConfigService],

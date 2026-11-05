@@ -43,7 +43,7 @@ export const LABELS: Record<string, string> = {
   // declarações
   PGDASD: 'PGDAS-D', DASN_SIMEI: 'DASN-SIMEI', DCTFWEB: 'DCTFWeb', FGTS_DIGITAL: 'FGTS Digital', DEFIS: 'DEFIS', DIRF: 'DIRF', ENTREGUE: 'Entregue', AUSENTE: 'Ausente', EM_ABERTO: 'Em aberto', RETIFICADA: 'Retificada',
   // tarefas
-  A_FAZER: 'A fazer', EM_PROGRESSO: 'Em progresso', CONCLUIDO: 'Concluído', DISPENSADO: 'Dispensado', EM_MULTA: 'Em multa',
+  A_FAZER: 'Aberta', EM_PROGRESSO: 'Aberta · em andamento', CONCLUIDO: 'Concluída', DISPENSADO: 'Desconsiderada', EM_MULTA: 'Aberta · em multa', IMPEDIMENTO: 'Impedimento', ABERTA: 'Aberta',
   // conversas
   NA_URA: 'Na URA', AGUARDANDO: 'Aguardando', EM_ATENDIMENTO: 'Em atendimento', ENCERRADA: 'Encerrada',
   // certidões

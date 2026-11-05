@@ -610,38 +610,78 @@ await step('agente local: token, exportar agora, entrega na pasta de importaçã
 });
 
 // ---------------------------------------------------------------- Tarefas → Configurar
-await step('Configurar tarefas: POP trava a conclusão; ao concluir avisa o cliente por e-mail, WhatsApp e app', async () => {
+await step('Tarefa: arquivos para entregar, POP obrigatório, status (impedimento, desconsiderada, reabrir) e nota de envio', async () => {
   const sum = await get('/tasks/config/summary');
   assert.ok(sum.stages >= 5 && sum.pops >= 5 && sum.flows >= 1, 'padrões criados (colunas, POPs, fluxos)');
   const pop = await post('/tasks/config/pops', { title: `POP teste ${Date.now()}`, items: [{ text: 'Conferir notas' }, { text: 'Transmitir declaração' }] });
   assert.equal(pop.items.length, 2);
-  const tpl = await post('/tasks/templates', { name: `Tarefa com POP ${Date.now()}`, recurrence: 'NENHUMA', dueDay: 1, steps: [{ order: 1, title: 'Executar', attachment: 'OPCIONAL' }] });
+  const tpl = await post('/tasks/templates', { name: `Tarefa com POP ${Date.now()}`, recurrence: 'NENHUMA', dueDay: 1, steps: [{ order: 1, title: 'Executar', attachment: 'OBRIGATORIO_CONCLUIR_E_ENVIAR' }] });
   await put(`/tasks/config/template-settings/${tpl.id}`, { popId: pop.id, notifyClient: true });
   const proc = await post(`/tasks/templates/${tpl.id}/apply`, { clientId: ctx.clientId, competence: comp });
   const full = await get(`/tasks/processes/${proc.id}`);
   assert.equal(full.popItems.length, 2, 'POP copiado para o processo');
-  const task = full.tasks[0];
-  await assert.rejects(post(`/tasks/tasks/${task.id}/complete`, {}), /POP/);
+  const conclude = (m) => post(`/tasks/processes/${proc.id}/conclude`, { message: m });
+
+  // Impedimento e desconsiderada exigem motivo; reabrir volta para Aberta
+  await assert.rejects(post(`/tasks/processes/${proc.id}/impediment`, { reason: '' }), /motivo/);
+  await post(`/tasks/processes/${proc.id}/impediment`, { reason: 'Cliente não enviou os extratos' });
+  assert.equal((await get(`/tasks/processes/${proc.id}`)).status, 'IMPEDIMENTO');
+  await assert.rejects(conclude(), /impedimento/);
+  assert.ok((await get('/notifications')).some((n) => n.kind === 'TAREFA_IMPEDIMENTO'), 'escritório avisado do impedimento');
+  await post(`/tasks/processes/${proc.id}/reopen`, {});
+  await assert.rejects(post(`/tasks/processes/${proc.id}/dismiss`, { reason: 'x' }), /motivo/);
+  await post(`/tasks/processes/${proc.id}/dismiss`, { reason: 'Sem movimento no período' });
+  assert.equal((await get(`/tasks/processes/${proc.id}`)).status, 'DISPENSADO');
+  await post(`/tasks/processes/${proc.id}/reopen`, { reason: 'Cliente teve movimento' });
+  assert.equal((await get(`/tasks/processes/${proc.id}`)).status, 'EM_PROGRESSO');
+
+  // Arquivos: coloca dois, tira um
+  const up = await upload([{ name: 'das.pdf', buf: await pdfWithText(['DAS 10/2026']) }, { name: 'errado.pdf', buf: await pdfWithText(['arquivo errado']) }]);
+  const files = await post(`/tasks/processes/${proc.id}/files`, { files: up });
+  assert.equal(files.length, 2);
+  await call('DELETE', `/tasks/processes/${proc.id}/files/${files.find((f) => f.fileName.includes('errado')).id}`);
+
+  // POP: marca, desmarca, só conclui com tudo marcado
+  await assert.rejects(conclude(), /POP/);
   await put(`/tasks/processes/${proc.id}/pop/${pop.items[0].id}`, { checked: true });
   await put(`/tasks/processes/${proc.id}/pop/${pop.items[1].id}`, { checked: true });
-  await put(`/tasks/processes/${proc.id}/pop/${pop.items[1].id}`, { checked: false }); // desmarca
-  await assert.rejects(post(`/tasks/tasks/${task.id}/complete`, {}), /1\/2/);
+  await put(`/tasks/processes/${proc.id}/pop/${pop.items[1].id}`, { checked: false });
+  await assert.rejects(conclude(), /1\/2/);
   const chk = await put(`/tasks/processes/${proc.id}/pop/${pop.items[1].id}`, { checked: true });
   assert.ok(chk.progress.complete);
-  const r = await post(`/tasks/tasks/${task.id}/complete`, {});
+  const r = await conclude('Segue o DAS. Vencimento dia 20.');
   assert.equal(r.concluded, true);
+  assert.ok(r.aviso.number >= 1 && r.aviso.files === 1, JSON.stringify(r.aviso));
   assert.ok(r.aviso.sent.EMAIL >= 1 && r.aviso.sent.WHATSAPP >= 1 && r.aviso.sent.APP >= 1, JSON.stringify(r.aviso));
   const out = await get('/dev/outbox');
-  assert.ok(out.some((o) => o.channel === 'EMAIL' && o.to === 'maria@cliente.com' && o.subject?.includes(tpl.name)), 'e-mail de conclusão');
+  const mail = out.find((o) => o.channel === 'EMAIL' && o.to === 'maria@cliente.com' && o.subject?.includes(tpl.name));
+  assert.ok(mail && /Segue o DAS/.test(mail.body) && /Protocolo de entrega/.test(mail.body), 'e-mail com mensagem e protocolo');
   assert.ok(out.some((o) => o.channel === 'WHATSAPP' && o.to === PHONE && o.body?.includes(tpl.name)), 'WhatsApp de conclusão');
+  assert.ok(out.some((o) => o.channel === 'WHATSAPP' && o.to === PHONE && o.body?.includes('das.pdf')), 'arquivo pelo WhatsApp');
   assert.ok(out.some((o) => o.channel === 'PUSH' && o.subject?.includes(tpl.name)), 'push no celular');
-  await assert.rejects(put(`/tasks/processes/${proc.id}/pop/${pop.items[0].id}`, { checked: false }), /encerrado/);
-  // App do cliente: aviso na caixa de notificações
+  const done = await get(`/tasks/processes/${proc.id}`);
+  assert.equal(done.status, 'CONCLUIDO');
+  assert.ok(done.files[0].sentAt && done.deliveries.length === 1);
+  await assert.rejects(call('DELETE', `/tasks/processes/${proc.id}/files/${done.files[0].id}`), /concluída|entregue/);
+  await assert.rejects(put(`/tasks/processes/${proc.id}/pop/${pop.items[0].id}`, { checked: false }), /reabra/);
+  const prot = await get(`/tasks/processes/${proc.id}/deliveries/${done.deliveries[0].id}/pdf`);
+  assert.equal(Buffer.from(await (await fetch(prot.url)).arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+  // App do cliente: aviso + entrega com os arquivos (abrir marca como visualizada)
   const n = await get('/app/notifications', ctx.app);
   const aviso = n.items.find((i) => i.title.includes(tpl.name));
-  assert.ok(aviso && !aviso.readAt && n.unread >= 1, 'aviso no app');
+  assert.ok(aviso && !aviso.readAt && n.unread >= 1 && aviso.link === `/entrega/${r.aviso.deliveryId}`, 'aviso no app');
+  const ent = await get(`/app/deliveries/${r.aviso.deliveryId}`, ctx.app);
+  assert.equal(ent.files.length, 1);
+  assert.match(ent.message, /Segue o DAS/);
+  assert.ok((await get(`/tasks/processes/${proc.id}`)).deliveries[0].viewedAt, 'escritório vê que o cliente abriu');
   await post('/app/notifications/read', { ids: [aviso.id] }, ctx.app);
   assert.ok((await get('/app/notifications', ctx.app)).items.find((i) => i.id === aviso.id).readAt);
+  const docs = await get('/app/documents', ctx.app).catch(() => null);
+  if (docs) assert.ok(docs.some((f) => f.name.startsWith('Entregas') && f.files.some((x) => x.name === 'das.pdf')), 'arquivo no Documentos do app');
+  // Reabrir concluída e concluir de novo gera nova nota de envio
+  await post(`/tasks/processes/${proc.id}/reopen`, {});
+  const r2 = await conclude();
+  assert.ok(r2.aviso.number > r.aviso.number);
   // Quadro: cartão na coluna de concluídos
   const board = await get('/tasks/board');
   const card = board.cards.find((c) => c.id === proc.id);
@@ -661,9 +701,13 @@ await step('Configurar tarefas: fluxo encadeado, quadro, agrupadores e documento
   const doing = stages.find((s) => s.name === 'Em andamento');
   const done = stages.find((s) => s.status === 'CONCLUIDO');
   assert.equal((await put(`/tasks/processes/${p1.id}/stage`, { stageId: doing.id })).status, 'EM_PROGRESSO');
-  await assert.rejects(put(`/tasks/processes/${p1.id}/stage`, { stageId: done.id }), /Conclua as etapas/);
+  // marcar e desmarcar a etapa não conclui a tarefa
   const full = await get(`/tasks/processes/${p1.id}`);
-  const r = await post(`/tasks/tasks/${full.tasks[0].id}/complete`, {});
+  assert.equal((await post(`/tasks/tasks/${full.tasks[0].id}/complete`, {})).concluded, false);
+  await post(`/tasks/tasks/${full.tasks[0].id}/uncomplete`, {});
+  assert.equal((await get(`/tasks/processes/${p1.id}`)).tasks[0].done, false);
+  // arrastar para "Concluído" conclui e cria o próximo passo do fluxo
+  const r = await put(`/tasks/processes/${p1.id}/stage`, { stageId: done.id });
   assert.ok(r.nextProcessId, 'próximo passo do fluxo criado');
   assert.equal(r.aviso, null, 'aviso desligado neste modelo');
   const p2 = await get(`/tasks/processes/${r.nextProcessId}`);

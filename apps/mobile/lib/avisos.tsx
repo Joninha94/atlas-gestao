@@ -55,14 +55,14 @@ export function AvisosProvider({ children, logoUrl, officeName }: { children: Re
     // Push recebido com o app aberto: atualiza na hora (o banner é o nosso, não o do sistema)
     const rec = Platform.OS !== 'web' ? Notifications.addNotificationReceivedListener(() => reload()) : null;
     // Toque no push do sistema: abre a caixa de avisos
-    const tap = Platform.OS !== 'web' ? Notifications.addNotificationResponseReceivedListener(() => router.push('/avisos')) : null;
+    const tap = Platform.OS !== 'web' ? Notifications.addNotificationResponseReceivedListener((r) => { const d = r.notification.request.content.data as any; router.push((d?.deliveryId ? `/entrega/${d.deliveryId}` : '/avisos') as any); }) : null;
     return () => { clearInterval(t); app.remove(); rec?.remove(); tap?.remove(); };
   }, [reload, router]);
 
   return (
     <AvisosContext.Provider value={{ items, unread, reload, markAllRead }}>
       {children}
-      {banner && <Banner aviso={banner} logoUrl={logoUrl} officeName={officeName} onClose={() => setBanner(null)} onOpen={() => { setBanner(null); router.push('/avisos'); }} />}
+      {banner && <Banner aviso={banner} logoUrl={logoUrl} officeName={officeName} onClose={() => setBanner(null)} onOpen={() => { setBanner(null); router.push((banner.link?.startsWith('/entrega/') ? banner.link : '/avisos') as any); }} />}
     </AvisosContext.Provider>
   );
 }

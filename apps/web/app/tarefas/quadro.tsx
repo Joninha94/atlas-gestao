@@ -5,7 +5,8 @@ import { ClipboardCheck, GitBranch } from 'lucide-react';
 import { apiPut } from '../../lib/api';
 import { useAction, useApi } from '../../lib/hooks';
 import { competence, date, lastCompetence } from '../../lib/format';
-import { Card, Empty, Loading, Select } from '../../components/ui';
+import { Badge, Card, Empty, Loading, Select } from '../../components/ui';
+import { TaskPanel } from './tarefa';
 
 /** Quadro (Kanban): arraste o cartão entre as colunas do escritório. "Concluído" passa pelas travas de etapas e POP. */
 export function Board() {
@@ -17,6 +18,7 @@ export function Board() {
   const { data: groups } = useApi<any[]>('/tasks/config/client-groups');
   const [drag, setDrag] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
+  const [current, setCurrent] = useState<string | null>(null);
   const { run } = useAction();
   const uname = (id: string) => users?.find((u) => u.id === id)?.name?.split(' ')[0];
 
@@ -61,10 +63,11 @@ export function Board() {
                   {cards.map((c) => {
                     const late = c.status !== 'CONCLUIDO' && new Date(c.dueDate) < new Date();
                     return (
-                      <article key={c.id} draggable onDragStart={() => setDrag(c.id)} onDragEnd={() => { setDrag(null); setOver(null); }}
-                        className={clsx('cursor-grab rounded-md border bg-white p-2.5 shadow-sm active:cursor-grabbing', drag === c.id && 'opacity-50', c.status === 'EM_MULTA' ? 'border-red-200' : 'border-slate-200')}>
+                      <article key={c.id} draggable onClick={() => setCurrent(c.id)} onDragStart={() => setDrag(c.id)} onDragEnd={() => { setDrag(null); setOver(null); }}
+                        className={clsx('cursor-grab rounded-md border bg-white p-2.5 shadow-sm active:cursor-grabbing', drag === c.id && 'opacity-50', c.status === 'EM_MULTA' || c.status === 'IMPEDIMENTO' ? 'border-red-200' : 'border-slate-200')}>
                         <div className="text-sm font-medium leading-snug">{c.title}</div>
                         <div className="truncate text-xs text-ink-muted">{c.client}</div>
+                        {c.status === 'IMPEDIMENTO' && <div className="mt-1"><Badge tone="red">Impedimento</Badge> <span className="text-[11px] text-red-700">{c.impedimentReason}</span></div>}
                         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-ink-muted">
                           <span className={clsx(late && 'font-semibold text-red-600')}>{date(c.dueDate)}</span>
                           <span>· {competence(c.competence)}</span>
@@ -83,6 +86,7 @@ export function Board() {
           })}
         </div>
       )}
+      {current && <TaskPanel id={current} onClose={() => setCurrent(null)} onChange={reload} />}
     </div>
   );
 }

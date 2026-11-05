@@ -9,6 +9,7 @@ import { ClientCreatedEvent, Events, GuideDispatchedEvent, ServiceFormSubmittedE
 import { AiGatewayService } from '../../integrations/ai/ai-gateway.service';
 import { DispatchService } from '../../integrations/dispatch.service';
 import { TaskConfigService } from './task-config.service';
+import { NotificationsService } from '../../integrations/notifications.service';
 
 @Injectable()
 export class TasksService {
@@ -19,6 +20,7 @@ export class TasksService {
     private readonly ai: AiGatewayService,
     private readonly dispatch: DispatchService,
     private readonly config: TaskConfigService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /** Junta aos modelos os ajustes do escritório (agrupador de tarefas, POP, aviso ao cliente). */
@@ -223,53 +225,139 @@ export class TasksService {
     return { sent: atts.length };
   }
 
+  /** Marca uma etapa interna como feita (não conclui a tarefa: a conclusão é o botão "Concluir e enviar"). */
   async completeTask(tenantId: string, userId: string, taskId: string, sendToClient: boolean) {
     const task = await this.prisma.processTask.findFirstOrThrow({
       where: { id: taskId, process: { tenantId } },
-      include: { attachments: true, process: { include: { tasks: true, template: true } } },
+      include: { attachments: true, process: { include: { tasks: true, template: true, files: true } } },
     });
-    if (task.blocked) throw new BadRequestException('Tarefa bloqueada: conclua a anterior (cascata).');
-    if (task.attachment !== 'OPCIONAL' && task.attachments.length === 0) {
-      throw new BadRequestException('Anexo obrigatório para concluir esta tarefa.');
+    assertOpen(task.process.status);
+    if (task.blocked) throw new BadRequestException('Etapa bloqueada: conclua a anterior (cascata).');
+    if (task.attachment !== 'OPCIONAL' && task.attachments.length === 0 && task.process.files.length === 0) {
+      throw new BadRequestException('Anexe o arquivo desta etapa (ou em "Arquivos para entregar") antes de marcar.');
     }
-    const tasks = task.process.tasks.map((t) => (t.id === taskId ? { ...t, done: true } : t));
-    const allDone = tasks.every((t) => t.done);
-    // POP: a última etapa (que conclui o processo) só fecha com todos os itens marcados
-    if (allDone) this.config.assertPopComplete(task.process);
     await this.prisma.processTask.update({ where: { id: taskId }, data: { done: true, doneAt: new Date(), doneById: userId } });
-
-    // Se esta etapa conclui o processo e o cliente vai receber o aviso, os anexos seguem junto com ele
-    const willNotify = allDone && (await this.config.shouldNotify(tenantId, task.process.templateId));
-    if (!willNotify && (task.attachment === 'OBRIGATORIO_CONCLUIR_E_ENVIAR' || sendToClient)) {
+    if (sendToClient) {
       for (const a of task.attachments.filter((x) => !x.sentToClientAt)) {
         await this.dispatch.sendFile(tenantId, task.process.clientId, a.fileKey, a.fileName, ['EMAIL', 'WHATSAPP']);
         await this.prisma.taskAttachment.update({ where: { id: a.id }, data: { sentToClientAt: new Date() } });
       }
     }
-
-    // Cascata e status do processo
+    const tasks = task.process.tasks.map((t) => (t.id === taskId ? { ...t, done: true } : t));
     if (task.process.template?.cascade) {
       for (const t of cascadeUnlock(tasks)) await this.prisma.processTask.update({ where: { id: t.id }, data: { blocked: t.blocked } });
     }
-    if (!allDone) {
-      if (task.process.status === 'A_FAZER') await this.prisma.process.update({ where: { id: task.processId }, data: { status: 'EM_PROGRESSO' } });
-      return { concluded: false };
-    }
-    return this.concludeProcess(tenantId, userId, task.processId, willNotify);
+    if (task.process.status === 'A_FAZER') await this.prisma.process.update({ where: { id: task.processId }, data: { status: 'EM_PROGRESSO' } });
+    return { concluded: false, allStepsDone: tasks.every((t) => t.done) };
   }
 
-  /** Conclusão do processo: coluna "Concluído", aviso ao cliente (e-mail, WhatsApp e app) e próximo passo do fluxo. */
-  async concludeProcess(tenantId: string, userId: string, processId: string, notify?: boolean) {
+  /** Desmarca uma etapa (enquanto a tarefa estiver aberta). Na cascata, as seguintes voltam a ficar bloqueadas. */
+  async uncompleteTask(tenantId: string, userId: string, taskId: string) {
+    const task = await this.prisma.processTask.findFirstOrThrow({ where: { id: taskId, process: { tenantId } }, include: { process: { include: { template: true, tasks: true } } } });
+    assertOpen(task.process.status);
+    await this.prisma.processTask.update({ where: { id: taskId }, data: { done: false, doneAt: null, doneById: null } });
+    if (task.process.template?.cascade) {
+      for (const t of task.process.tasks.filter((x) => x.order > task.order && !x.done)) await this.prisma.processTask.update({ where: { id: t.id }, data: { blocked: true } });
+    }
+    await this.prisma.auditLog.create({ data: { tenantId, userId, clientId: task.process.clientId, action: 'etapa.desmarcar', entity: 'ProcessTask', entityId: taskId } });
+    return { ok: true };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Arquivos que serão entregues ao cliente (colocar e tirar enquanto a tarefa estiver aberta)
+  // ---------------------------------------------------------------------------
+  async addFiles(tenantId: string, userId: string, processId: string, files: { fileKey: string; fileName: string; size?: number; mime?: string }[]) {
     const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    assertOpen(p.status, true);
+    if (!files?.length) throw new BadRequestException('Nenhum arquivo enviado.');
+    await this.prisma.processFile.createMany({ data: files.map((f) => ({ processId, fileKey: f.fileKey, fileName: f.fileName, size: f.size ?? 0, mime: f.mime ?? null, uploadedById: userId })) });
+    if (p.status === 'A_FAZER') await this.prisma.process.update({ where: { id: processId }, data: { status: 'EM_PROGRESSO' } });
+    return this.prisma.processFile.findMany({ where: { processId }, orderBy: { createdAt: 'asc' } });
+  }
+
+  async removeFile(tenantId: string, userId: string, processId: string, fileId: string) {
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    assertOpen(p.status, true);
+    const f = await this.prisma.processFile.findFirstOrThrow({ where: { id: fileId, processId } });
+    if (f.sentAt) throw new BadRequestException('Este arquivo já foi entregue ao cliente e consta no protocolo.');
+    await this.prisma.processFile.delete({ where: { id: fileId } });
+    await this.prisma.auditLog.create({ data: { tenantId, userId, clientId: p.clientId, action: 'tarefa.arquivo_remover', entity: 'Process', entityId: processId, meta: { fileName: f.fileName } } });
+    return { removed: true };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Status da tarefa: Aberta → Concluída (envia ao cliente) | Impedimento (motivo) | Desconsiderada (motivo) → Reabrir
+  // ---------------------------------------------------------------------------
+  /**
+   * Concluir e enviar: exige o POP todo marcado; marca as etapas que faltavam, gera a nota de envio
+   * (protocolo) e manda os arquivos ao cliente. Também usado pela coluna "Concluído" do quadro.
+   */
+  async concludeProcess(tenantId: string, userId: string, processId: string, notify?: boolean, opts: { message?: string | null; userName?: string } = {}) {
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId }, include: { tasks: { include: { attachments: true } }, files: true } });
+    if (p.status === 'CONCLUIDO') throw new BadRequestException('Tarefa já concluída.');
+    if (p.status === 'DISPENSADO') throw new BadRequestException('Tarefa desconsiderada: reabra para concluir.');
+    if (p.status === 'IMPEDIMENTO') throw new BadRequestException('Tarefa com impedimento: reabra quando o impedimento for resolvido.');
     this.config.assertPopComplete(p);
+    const hasFiles = p.files.length > 0 || p.tasks.some((t) => t.attachments.length > 0);
+    const needs = p.tasks.find((t) => !t.done && t.attachment !== 'OPCIONAL');
+    if (needs && !hasFiles) throw new BadRequestException(`Anexe os arquivos que serão entregues (etapa "${needs.title}" exige anexo).`);
+    const now = new Date();
+    await this.prisma.processTask.updateMany({ where: { processId, done: false }, data: { done: true, doneAt: now, doneById: userId, blocked: false } });
     const done = await this.doneStage(tenantId);
-    await this.prisma.process.update({ where: { id: processId }, data: { status: 'CONCLUIDO', completedAt: new Date(), ...(done ? { stageId: done } : {}) } });
+    await this.prisma.process.update({ where: { id: processId }, data: { status: 'CONCLUIDO', completedAt: now, ...(done ? { stageId: done } : {}) } });
     notify ??= await this.config.shouldNotify(tenantId, p.templateId);
-    let aviso: unknown = null;
-    if (notify) aviso = await this.config.notifyCompletion(tenantId, processId).catch((e) => ({ errors: [(e as Error).message] }));
+    let aviso: any = null;
+    if (notify) aviso = await this.config.deliver(tenantId, processId, { userId, userName: opts.userName, message: opts.message }).catch((e) => ({ errors: [(e as Error).message] }));
     const next = await this.advanceFlow(tenantId, processId).catch((e: Error) => { this.log.warn(`Fluxo ${processId}: ${e.message}`); return null; });
-    await this.prisma.auditLog.create({ data: { tenantId, userId, clientId: p.clientId, action: 'process.concluir', entity: 'Process', entityId: processId, meta: { notify, nextProcessId: next?.id ?? null } } });
+    await this.history(tenantId, userId, p, 'Concluída', aviso?.number ? `Nota de envio nº ${String(aviso.number).padStart(6, '0')}${opts.message ? ` — "${opts.message}"` : ''}` : notify ? undefined : 'sem envio ao cliente (desligado neste modelo)');
+    await this.prisma.auditLog.create({ data: { tenantId, userId, clientId: p.clientId, action: 'process.concluir', entity: 'Process', entityId: processId, meta: { notify, deliveryId: aviso?.deliveryId ?? null, nextProcessId: next?.id ?? null } } });
     return { concluded: true, aviso, nextProcessId: next?.id ?? null };
+  }
+
+  /** Impedimento: o colaborador não consegue fazer agora. Só com o motivo; o escritório é avisado no sino. */
+  async setImpediment(tenantId: string, userId: string, processId: string, reason: string) {
+    if (!reason || reason.trim().length < 5) throw new BadRequestException('Informe o motivo do impedimento (mínimo 5 letras).');
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId }, include: { client: { select: { legalName: true } } } });
+    assertOpen(p.status);
+    await this.prisma.process.update({ where: { id: processId }, data: { status: 'IMPEDIMENTO', impedimentReason: reason.trim(), impedimentAt: new Date(), impedimentById: userId } });
+    await this.history(tenantId, userId, p, 'Impedimento', reason.trim());
+    await this.notifications.notify({ tenantId, userId: null, clientId: p.clientId, kind: 'TAREFA_IMPEDIMENTO', title: `Impedimento: ${p.title}`, body: `${p.client.legalName} — ${reason.trim()}`, link: `/tarefas?processo=${p.id}` }).catch(() => undefined);
+    return { status: 'IMPEDIMENTO' };
+  }
+
+  /** Desconsiderada: a tarefa não se aplica neste período. Só com o motivo. */
+  async dismiss(tenantId: string, userId: string, processId: string, reason: string) {
+    if (!reason || reason.trim().length < 5) throw new BadRequestException('Informe o motivo para desconsiderar (mínimo 5 letras).');
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    if (p.status === 'CONCLUIDO') throw new BadRequestException('Tarefa concluída: reabra antes de desconsiderar.');
+    if (p.status === 'DISPENSADO') throw new BadRequestException('Tarefa já desconsiderada.');
+    await this.prisma.process.update({ where: { id: processId }, data: { status: 'DISPENSADO', dismissReason: reason.trim(), dismissedAt: new Date(), dismissedById: userId } });
+    await this.history(tenantId, userId, p, 'Desconsiderada', reason.trim());
+    await this.prisma.auditLog.create({ data: { tenantId, userId, clientId: p.clientId, action: 'process.dispensar', entity: 'Process', entityId: processId, meta: { reason } } });
+    return { status: 'DISPENSADO' };
+  }
+
+  /** Reabrir: Concluída, Impedimento ou Desconsiderada voltam para Aberta. Um novo "Concluir" gera nova nota de envio. */
+  async reopen(tenantId: string, userId: string, processId: string, reason?: string) {
+    const p = await this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId } });
+    if (!['CONCLUIDO', 'IMPEDIMENTO', 'DISPENSADO'].includes(p.status)) throw new BadRequestException('A tarefa já está aberta.');
+    const stage = await this.prisma.boardStage.findFirst({ where: { tenantId, status: 'EM_PROGRESSO' }, orderBy: { order: 'asc' } });
+    await this.prisma.process.update({
+      where: { id: processId },
+      data: {
+        status: 'EM_PROGRESSO', completedAt: null, notifiedAt: null, impedimentReason: null, impedimentAt: null, impedimentById: null,
+        dismissReason: null, dismissedAt: null, dismissedById: null, ...(stage ? { stageId: stage.id } : {}),
+      },
+    });
+    const de = p.status === 'CONCLUIDO' ? 'Concluída' : p.status === 'IMPEDIMENTO' ? 'Impedimento' : 'Desconsiderada';
+    await this.history(tenantId, userId, p, `Reaberta (estava ${de})`, reason?.trim() || undefined);
+    await this.prisma.auditLog.create({ data: { tenantId, userId, clientId: p.clientId, action: 'process.reabrir', entity: 'Process', entityId: processId, meta: { from: p.status, reason } } });
+    return { status: 'EM_PROGRESSO' };
+  }
+
+  /** Histórico da tarefa (aparece nos comentários). */
+  private history(tenantId: string, userId: string, p: { id: string }, what: string, detail?: string) {
+    return this.prisma.taskComment.create({ data: { processId: p.id, authorId: userId, body: `● ${what}${detail ? `: ${detail}` : ''}` } }).catch(() => undefined);
   }
 
   private async doneStage(tenantId: string) {
@@ -315,7 +403,7 @@ export class TasksService {
     const processes = await this.prisma.process.findMany({
       where: {
         tenantId, client: { active: true, ...(f.clientGroupId ? { clientGroupIds: { has: f.clientGroupId } } : {}) }, competence: f.competence,
-        OR: [{ status: { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA'] } }, { status: 'CONCLUIDO', completedAt: { gte: new Date(Date.now() - 15 * 86_400_000) } }],
+        OR: [{ status: { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA', 'IMPEDIMENTO'] } }, { status: 'CONCLUIDO', completedAt: { gte: new Date(Date.now() - 15 * 86_400_000) } }],
         ...(f.assigneeId ? { assigneeIds: { has: f.assigneeId } } : {}),
         ...(f.departmentId ? { departmentIds: { has: f.departmentId } } : {}),
       },
@@ -334,6 +422,7 @@ export class TasksService {
         id: p.id, title: p.title, competence: p.competence, dueDate: p.dueDate, status: p.status, stageId, assigneeIds: p.assigneeIds,
         client: p.client.tradeName ?? p.client.legalName, steps: { done: p.tasks.filter((t) => t.done).length, total: p.tasks.length },
         pop: items.length ? { done: items.filter((i) => checks[i.id]).length, total: items.length } : null, flowStep: p.flowStep,
+        impedimentReason: p.impedimentReason,
       };
     });
     return { stages, cards };
@@ -345,24 +434,18 @@ export class TasksService {
       this.prisma.boardStage.findFirstOrThrow({ where: { id: stageId, tenantId } }),
       this.prisma.process.findFirstOrThrow({ where: { id: processId, tenantId }, include: { tasks: true } }),
     ]);
-    if (p.status === 'DISPENSADO') throw new BadRequestException('Processo dispensado não pode ser movido.');
+    if (p.status === 'DISPENSADO') throw new BadRequestException('Tarefa desconsiderada: reabra antes de mover.');
+    if (p.status === 'IMPEDIMENTO') throw new BadRequestException('Tarefa com impedimento: reabra antes de mover.');
     if (stage.status === 'CONCLUIDO') {
       if (p.status === 'CONCLUIDO') return this.prisma.process.update({ where: { id: processId }, data: { stageId } });
-      const pend = p.tasks.filter((t) => !t.done);
-      if (pend.length) throw new BadRequestException(`Conclua as etapas antes: ${pend.map((t) => t.title).slice(0, 3).join('; ')}`);
       this.config.assertPopComplete(p);
-      await this.prisma.process.update({ where: { id: processId }, data: { stageId } });
       return this.concludeProcess(tenantId, userId, processId);
     }
-    const status = p.status === 'CONCLUIDO' ? 'EM_PROGRESSO' : p.status === 'EM_MULTA' ? 'EM_MULTA' : stage.status === 'A_FAZER' ? 'A_FAZER' : 'EM_PROGRESSO';
-    return this.prisma.process.update({ where: { id: processId }, data: { stageId, status, ...(p.status === 'CONCLUIDO' ? { completedAt: null } : {}) } });
+    if (p.status === 'CONCLUIDO') throw new BadRequestException('Tarefa concluída: use "Reabrir" para voltar a trabalhar nela.');
+    const status = p.status === 'EM_MULTA' ? 'EM_MULTA' : stage.status === 'A_FAZER' ? 'A_FAZER' : 'EM_PROGRESSO';
+    return this.prisma.process.update({ where: { id: processId }, data: { stageId, status } });
   }
 
-  async dismiss(tenantId: string, userId: string, processId: string, reason: string) {
-    if (!reason || reason.trim().length < 5) throw new BadRequestException('Justificativa obrigatória para dispensar.');
-    await this.prisma.auditLog.create({ data: { tenantId, userId, action: 'process.dispensar', entity: 'Process', entityId: processId, meta: { reason } } });
-    return this.prisma.process.updateMany({ where: { id: processId, tenantId }, data: { status: 'DISPENSADO', dismissReason: reason } });
-  }
 
   async bulkUpdate(tenantId: string, ids: string[], data: { assigneeIds?: string[]; dueDate?: string; departmentIds?: string[] }) {
     return this.prisma.process.updateMany({
@@ -419,14 +502,15 @@ export class TasksService {
     const scope =
       user.role === 'ADMIN' ? {} : user.role === 'GESTOR' ? { assigneeIds: { hasSome: [user.sub, ...managedUserIds] } } : { assigneeIds: { has: user.sub } };
     const where = { tenantId, ...scope };
-    const [aFazer, emProgresso, emMulta, concluidos, vencendo] = await Promise.all([
+    const [aFazer, emProgresso, emMulta, concluidos, vencendo, impedimento] = await Promise.all([
       this.prisma.process.count({ where: { ...where, status: 'A_FAZER' } }),
       this.prisma.process.count({ where: { ...where, status: 'EM_PROGRESSO' } }),
       this.prisma.process.count({ where: { ...where, status: 'EM_MULTA' } }),
       this.prisma.process.count({ where: { ...where, status: 'CONCLUIDO', completedAt: { gte: new Date(Date.now() - 30 * 86_400_000) } } }),
       this.prisma.process.findMany({ where: { ...where, status: { in: ['A_FAZER', 'EM_PROGRESSO'] }, dueDate: { lte: new Date(Date.now() + 7 * 86_400_000) } }, orderBy: { dueDate: 'asc' }, take: 50, include: { client: { select: { legalName: true } } } }),
+      this.prisma.process.count({ where: { ...where, status: 'IMPEDIMENTO' } }),
     ]);
-    return { aFazer, emProgresso, emMulta, concluidos30d: concluidos, vencendo7d: vencendo };
+    return { aFazer, emProgresso, emMulta, impedimento, abertas: aFazer + emProgresso + emMulta, concluidos30d: concluidos, vencendo7d: vencendo };
   }
 
   /** Visão calendário: o que entregar por dia, com a razão social do cliente. */
@@ -442,6 +526,13 @@ export class TasksService {
       orderBy: { dueDate: 'asc' },
     });
   }
+}
+
+/** Aberta = A fazer, Em progresso ou Em multa. `allowImpediment` permite mexer em anexos com impedimento. */
+export function assertOpen(status: string, allowImpediment = false) {
+  if (['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA'].includes(status) || (allowImpediment && status === 'IMPEDIMENTO')) return;
+  const msg: Record<string, string> = { CONCLUIDO: 'Tarefa concluída', DISPENSADO: 'Tarefa desconsiderada', IMPEDIMENTO: 'Tarefa com impedimento' };
+  throw new BadRequestException(`${msg[status] ?? 'Tarefa encerrada'}: reabra para alterar.`);
 }
 
 /**
