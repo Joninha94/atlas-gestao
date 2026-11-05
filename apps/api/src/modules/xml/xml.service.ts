@@ -43,7 +43,7 @@ export class XmlService {
     const cert = await this.certs.client(clientId);
     if (!cert || client.document.length !== 14) return { skipped: 'Cliente sem certificado A1 válido' };
 
-    const cursor = await this.prisma.dfeCursor.upsert({ where: { clientId_kind: { clientId, kind: 'NFE' } }, create: { clientId, kind: 'NFE' }, update: {} });
+    const cursor = await this.cursor(clientId, 'NFE');
     if (cursor.nextAllowedAt && cursor.nextAllowedAt > new Date()) return { skipped: 'Aguardando janela da SEFAZ' };
 
     let ult = cursor.lastNsu;
@@ -153,7 +153,7 @@ export class XmlService {
     const client = await this.prisma.clientCompany.findFirstOrThrow({ where: { id: clientId, tenantId } });
     const cert = await this.certs.client(clientId);
     if (!cert) return { skipped: 'Cliente sem certificado A1' };
-    const cursor = await this.prisma.dfeCursor.upsert({ where: { clientId_kind: { clientId, kind: 'NFSE' } }, create: { clientId, kind: 'NFSE' }, update: {} });
+    const cursor = await this.cursor(clientId, 'NFSE');
     const items = await this.nfse.distribute(cert, client.document, Number(cursor.lastNsu), client.legalName);
     let saved = 0;
     for (const it of items) saved += (await this.saveNfseXml(tenantId, clientId, client.document, it.xml, it.chaveAcesso)) ? 1 : 0;
@@ -293,6 +293,17 @@ export class XmlService {
       projecoes: premises.map((p) => compareSimplesRegimes({ annualRevenue: s.revenue * factor, annualPurchases: s.cost * factor, b2bRevenueShare }, p)),
       ...supplierCreditSplit(docs),
     };
+  }
+
+  /** Cursor do DistDFe. Dois jobs do mesmo cliente ao mesmo tempo podem disputar a criação: na colisão, lê o que já existe. */
+  private async cursor(clientId: string, kind: 'NFE' | 'NFSE') {
+    const where = { clientId_kind: { clientId, kind } } as const;
+    try {
+      return await this.prisma.dfeCursor.upsert({ where, create: { clientId, kind }, update: {} });
+    } catch (e: any) {
+      if (e?.code !== 'P2002') throw e;
+      return this.prisma.dfeCursor.findUniqueOrThrow({ where });
+    }
   }
 }
 

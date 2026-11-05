@@ -868,6 +868,16 @@ await step('Anexos da tarefa: PGDAS-D exige DAS, Recibo, Extrato e Declaração;
   await assert.rejects(post(`/tasks/processes/${proc.id}/conclude`, {}), /Guia complementar/);
 });
 
+await step('Modelo sem etapas pode ser salvo e gera tarefa; erros de validação em português com o campo', async () => {
+  const t = await post('/tasks/templates', { name: `Sem etapas ${Date.now()}`, recurrence: 'NENHUMA', dueDay: 1, steps: [], documents: [{ name: 'Contrato' }] });
+  const again = await put(`/tasks/templates/${t.id}`, { name: t.name, recurrence: 'NENHUMA', dueDay: 1, steps: [], documents: [{ name: 'Contrato' }] });
+  assert.equal(again.steps.length, 0);
+  const proc = await post(`/tasks/templates/${t.id}/apply`, { clientId: ctx.clientId, competence: comp });
+  assert.equal((await get(`/tasks/processes/${proc.id}`)).tasks.length, 0);
+  await assert.rejects(post('/tasks/templates', { name: 'x', recurrence: 'NENHUMA' }), /Nome: mínimo de 2 caractere/);
+  await assert.rejects(post('/tasks/config/flows', { name: 'Fluxo', steps: [] }), /pelo menos 2 passos/);
+});
+
 await step('job que falha de vez vira alerta no painel e pode ser reprocessado', async () => {
   const me = await get('/auth/me');
   const q = new Queue('monitor', { connection: conn, prefix: process.env.QUEUE_PREFIX ?? 'produtiva' });

@@ -5,6 +5,7 @@ import { NestFactory } from '@nestjs/core';
 import { ArgumentsHost, BadRequestException, Catch, ExceptionFilter, HttpException, Logger } from '@nestjs/common';
 import helmet from 'helmet';
 import { ZodError } from 'zod';
+import './common/zod-pt';
 import { AppModule } from './app.module';
 import { assertSafeConfig } from './config';
 import { captureError } from './common/observability';

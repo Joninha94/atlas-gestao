@@ -59,7 +59,7 @@ const TemplateSchema = z.object({
   optIn: z.boolean().default(false),
   notes: z.string().max(2000).nullish(),
   monitorLink: z.enum(['SIMPLES', 'MEI', 'DCTFWEB', 'FGTS', 'PARCELAMENTOS']).nullish().or(z.literal('').transform(() => null)),
-  steps: z.array(StepSchema).min(1),
+  steps: z.array(StepSchema).default([]), // etapas são opcionais: POP e anexos já guiam a tarefa
   documents: DocsSchema.default([]),
 });
 

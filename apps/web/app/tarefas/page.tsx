@@ -346,8 +346,9 @@ function Templates() {
             <label className="mt-6 flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={edit.notifyClient !== false} onChange={(e) => setEdit({ ...edit, notifyClient: e.target.checked })} /><span>Ao concluir, enviar ao cliente<span className="block text-xs text-ink-muted">E-mail, WhatsApp e app, com a nota de envio.</span></span></label>
           </div>
           <div>
-            <span className="label">Etapas</span>
+            <span className="label">Etapas <span className="font-normal text-ink-muted">(opcional — o POP e os anexos já guiam a tarefa)</span></span>
             <div className="space-y-2">
+              {edit.steps.length === 0 && <p className="text-xs text-ink-muted">Sem etapas. A tarefa terá só os anexos e o POP.</p>}
               {edit.steps.map((s: any, i: number) => (
                 <div key={i} className="flex flex-wrap items-center gap-2">
                   <span className="w-5 text-sm text-ink-muted">{i + 1}.</span>
