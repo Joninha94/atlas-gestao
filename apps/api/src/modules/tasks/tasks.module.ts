@@ -94,11 +94,13 @@ export class TasksController {
     @Query('assigneeId') assigneeId?: string,
     @Query('competence') competence?: string,
     @Query('q') q?: string,
+    @Query('atividade') atividade?: string,
   ) {
     return this.prisma.process.findMany({
       where: {
         tenantId: u.tenantId,
         client: { active: true, ...clientSearch(q) },
+        ...(atividade?.trim() ? { title: { contains: atividade.trim(), mode: 'insensitive' as const } } : {}),
         status: status === 'ABERTA' ? { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA'] } : (status as any),
         competence,
         ...(departmentId ? { departmentIds: { has: departmentId } } : {}),

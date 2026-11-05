@@ -60,7 +60,9 @@ function List({ initialStatus, mine }: { initialStatus: string; mine: boolean })
   const [f, setF] = useState({ status: initialStatus, competence: openId ? '' : lastCompetence(), departmentId: '', assigneeId: mine ? me : '' });
   const [search, setSearch] = useState('');
   const busca = useDebounced(search.trim());
-  const q = new URLSearchParams(Object.fromEntries(Object.entries({ ...f, q: busca }).filter(([, v]) => v))).toString();
+  const [searchAtv, setSearchAtv] = useState('');
+  const buscaAtv = useDebounced(searchAtv.trim());
+  const q = new URLSearchParams(Object.fromEntries(Object.entries({ ...f, q: busca, atividade: buscaAtv }).filter(([, v]) => v))).toString();
   const { data, reload } = useApi<any[]>(`/tasks/processes?${q}`);
   const { data: deps } = useApi<any[]>('/departments');
   const { data: users } = useApi<any[]>('/users');
@@ -75,6 +77,7 @@ function List({ initialStatus, mine }: { initialStatus: string; mine: boolean })
     <Card pad={false}>
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3">
         <SearchInput className="w-full sm:w-64" value={search} onChange={setSearch} placeholder="Pesquisar empresa (nome ou CNPJ)" />
+        <SearchInput className="w-full sm:w-56" value={searchAtv} onChange={setSearchAtv} placeholder="Pesquisar atividade (ex.: DAS)" />
         <MonthInput value={f.competence} onChange={(v: string) => setF({ ...f, competence: v })} allowEmpty />
         <Select value={f.status} onChange={(v) => setF({ ...f, status: v })} placeholder="Todos os status" options={[
           { value: 'ABERTA', label: 'Abertas' }, { value: 'EM_MULTA', label: 'Abertas em multa' }, { value: 'IMPEDIMENTO', label: 'Impedimento' },
@@ -86,7 +89,7 @@ function List({ initialStatus, mine }: { initialStatus: string; mine: boolean })
           <Button variant="secondary" size="sm" disabled={!sel.size} onClick={() => setBulk({ assigneeIds: [], dueDate: '' })}>Editar {sel.size || ''} em lote</Button>
         </div>
       </div>
-      {!data ? <Loading /> : data.length === 0 ? <div className="p-6"><Empty title={busca ? `Nenhuma tarefa para "${busca}"` : 'Nenhuma tarefa neste filtro'}>As tarefas são geradas automaticamente pelos modelos conforme o prazo de cada obrigação.</Empty></div> : (
+      {!data ? <Loading /> : data.length === 0 ? <div className="p-6"><Empty title={busca || buscaAtv ? `Nenhuma tarefa para "${[busca, buscaAtv].filter(Boolean).join(' / ')}"` : 'Nenhuma tarefa neste filtro'}>As tarefas são geradas automaticamente pelos modelos conforme o prazo de cada obrigação.</Empty></div> : (
         <div className="divide-y divide-slate-100">
           {data.map((p) => {
             const done = p.tasks.filter((t: any) => t.done).length;

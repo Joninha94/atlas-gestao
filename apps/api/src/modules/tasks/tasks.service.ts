@@ -654,11 +654,12 @@ export class TasksService {
   }
 
   /** Quadro: colunas do escritório com os processos abertos (e os concluídos nos últimos 15 dias). */
-  async board(tenantId: string, f: { assigneeId?: string; departmentId?: string; competence?: string; clientGroupId?: string; q?: string }) {
+  async board(tenantId: string, f: { assigneeId?: string; departmentId?: string; competence?: string; clientGroupId?: string; q?: string; atividade?: string }) {
     const stages = await this.prisma.boardStage.findMany({ where: { tenantId }, orderBy: { order: 'asc' } });
     const processes = await this.prisma.process.findMany({
       where: {
         tenantId, client: { active: true, ...(f.clientGroupId ? { clientGroupIds: { has: f.clientGroupId } } : {}), ...clientSearch(f.q) }, competence: f.competence,
+        ...(f.atividade?.trim() ? { title: { contains: f.atividade.trim(), mode: 'insensitive' as const } } : {}),
         OR: [{ status: { in: ['A_FAZER', 'EM_PROGRESSO', 'EM_MULTA', 'IMPEDIMENTO'] } }, { status: 'CONCLUIDO', completedAt: { gte: new Date(Date.now() - 15 * 86_400_000) } }],
         ...(f.assigneeId ? { assigneeIds: { has: f.assigneeId } } : {}),
         ...(f.departmentId ? { departmentIds: { has: f.departmentId } } : {}),

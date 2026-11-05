@@ -13,7 +13,9 @@ export function Board() {
   const [f, setF] = useState({ competence: lastCompetence(), assigneeId: '', departmentId: '', clientGroupId: '' });
   const [search, setSearch] = useState('');
   const busca = useDebounced(search.trim());
-  const q = new URLSearchParams(Object.fromEntries(Object.entries({ ...f, q: busca }).filter(([, v]) => v))).toString();
+  const [searchAtv, setSearchAtv] = useState('');
+  const buscaAtv = useDebounced(searchAtv.trim());
+  const q = new URLSearchParams(Object.fromEntries(Object.entries({ ...f, q: busca, atividade: buscaAtv }).filter(([, v]) => v))).toString();
   const { data, reload, setData } = useApi<{ stages: any[]; cards: any[] }>(`/tasks/board?${q}`);
   const { data: users } = useApi<any[]>('/users');
   const { data: deps } = useApi<any[]>('/departments');
@@ -40,6 +42,7 @@ export function Board() {
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <SearchInput className="w-full sm:w-64" value={search} onChange={setSearch} placeholder="Pesquisar empresa (nome ou CNPJ)" />
+        <SearchInput className="w-full sm:w-56" value={searchAtv} onChange={setSearchAtv} placeholder="Pesquisar atividade (ex.: DAS)" />
         <MonthInput value={f.competence} onChange={(v: string) => setF({ ...f, competence: v })} allowEmpty />
         <Select value={f.assigneeId} onChange={(v) => setF({ ...f, assigneeId: v })} placeholder="Todos os responsáveis" options={(users ?? []).map((u) => ({ value: u.id, label: u.name }))} />
         <Select value={f.departmentId} onChange={(v) => setF({ ...f, departmentId: v })} placeholder="Todos os setores" options={(deps ?? []).map((d) => ({ value: d.id, label: d.name }))} />
