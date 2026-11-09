@@ -26,6 +26,16 @@ No Windows, dê dois cliques em `iniciar.bat`.
 A primeira vez leva **de 5 a 15 minutos** (o Docker baixa e monta tudo). Depois, sobe em segundos.
 O `--demo` carrega 6 clientes de exemplo com guias, notas, atendimentos e tarefas. Sem ele, o sistema começa vazio.
 
+## Atualizar sem perder dados
+
+Dê dois cliques em **`Atualizar Produtiva.command`** (use sempre a mesma pasta; não baixe um zip novo por cima). Ele:
+
+1. faz **backup automático** do banco e dos arquivos em `~/.produtiva/backups` (guarda os 20 mais novos);
+2. baixa a versão nova, troca os arquivos do programa e **remove os que não são mais usados** (cópias "arquivo 2", sobras antigas) — eles vão para `~/.produtiva/arquivos-removidos`, nada é apagado de vez;
+3. religa o sistema. O banco é só **migrado**, nunca recriado: clientes, tarefas, configurações e senhas continuam.
+
+As chaves do sistema ficam em `~/.produtiva/env-local-docker` e valem para qualquer pasta. Para voltar a um backup: **`Restaurar Backup Produtiva.command`**.
+
 ## 3. Entre
 
 | | Endereço | Acesso |

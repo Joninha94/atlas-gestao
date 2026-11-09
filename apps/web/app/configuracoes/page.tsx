@@ -56,11 +56,18 @@ function Escritorio() {
   useEffect(() => { if (data && !f) setF({ name: data.name, smtpHost: data.smtpHost ?? '', smtpPort: data.smtpPort ?? 587, smtpUser: data.smtpUser ?? '', smtpPass: '', emailFrom: data.emailFrom ?? '', emailSignature: data.emailSignature ?? '', whatsappPhoneId: data.whatsappPhoneId ?? '', whatsappToken: '' }); }, [data, f]);
   if (!data || !f || !o) return <Loading />;
   /** Um único salvamento: dados do escritório/papel timbrado + e-mail e WhatsApp de disparo. */
+  const dispatchBody = () => ({ ...f, smtpHost: f.smtpHost.trim(), smtpUser: f.smtpUser.trim(), emailFrom: (f.emailFrom || '').trim(), smtpPort: Number(f.smtpPort) || undefined, smtpPass: f.smtpPass || undefined, whatsappToken: f.whatsappToken || undefined });
+  /** Salva só e-mail/WhatsApp de disparo (não depende dos dados do papel timbrado). */
+  const saveDispatch = () => run(async () => {
+    await apiPut('/settings/dispatch', dispatchBody());
+    setF(null); reload();
+  }, 'E-mail e WhatsApp de disparo salvos.');
   const save = () => run(async () => {
+    // disparo primeiro: um erro no papel timbrado não impede de gravar o e-mail
+    await apiPut('/settings/dispatch', dispatchBody());
     const e1 = erroDocumento(o.cnpj, 'cnpj') ?? (o.accountantCpf ? erroDocumento(o.accountantCpf, 'cpf') : null);
-    if (e1) throw new Error(e1);
+    if (e1) { setF(null); reload(); throw new Error(`E-mail/WhatsApp salvos, mas o papel timbrado não: ${e1}`); }
     const r = await apiPut('/settings/office', { ...o, name: f.name });
-    await apiPut('/settings/dispatch', { ...f, smtpPort: Number(f.smtpPort) || undefined, smtpPass: f.smtpPass || undefined, whatsappToken: f.whatsappToken || undefined, emailFrom: f.emailFrom || undefined });
     if (r.cnpj !== data.cnpj) toast('CNPJ do escritório alterado: use o novo CNPJ no próximo login.');
     setO(null); setF(null); // recarrega os campos com o que ficou gravado no servidor
     reload();
@@ -123,7 +130,7 @@ function Escritorio() {
             </div>
           </div>
         </Card>
-        <Card title="E-mail de disparo (SMTP)" actions={data.smtpConfigured ? <Badge tone="green">Envio real ativo</Badge> : <Badge tone="amber">Não configurado</Badge>}>
+        <Card title="E-mail de disparo (SMTP)" actions={<div className="flex items-center gap-2">{data.smtpConfigured ? <Badge tone="green">Envio real ativo</Badge> : <Badge tone="amber">Não configurado</Badge>}<Button size="sm" disabled={busy} onClick={saveDispatch}>Salvar</Button></div>}>
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="text-ink-muted">Preencher com:</span>
@@ -146,7 +153,8 @@ function Escritorio() {
               <Button variant="secondary" disabled={!testTo || busy} onClick={() => run(async () => {
                 setTestRes(null);
                 // salva o que está na tela antes de testar (senão testaria a configuração antiga)
-                await apiPut('/settings/dispatch', { ...f, smtpPort: Number(f.smtpPort) || undefined, smtpPass: f.smtpPass || undefined, whatsappToken: f.whatsappToken || undefined, emailFrom: f.emailFrom || undefined });
+                await apiPut('/settings/dispatch', dispatchBody());
+                setF({ ...f, smtpPass: '' });
                 const r = await apiPost('/settings/test-email', { to: testTo });
                 if (r.ok === false) { setTestRes({ ok: false, msg: r.error }); reload(); throw new Error('O e-mail de teste não foi enviado.'); }
                 setTestRes({ ok: true, msg: `Enviado para ${r.sentTo ?? testTo}. Confira a caixa de entrada (e o spam).` });

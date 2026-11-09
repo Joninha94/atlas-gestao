@@ -15,13 +15,15 @@ import { ClientsModule, ClientsService } from '../clients/clients.module';
 import { MonitorModule } from '../monitor/monitor.module';
 import { MonitorSyncService } from '../monitor/monitor-sync.service';
 
+const txt = z.string().transform((v) => v.trim());
 const DispatchSettingsSchema = z.object({
-  name: z.string().min(2).optional(),
-  smtpHost: z.string().optional(),
-  smtpPort: z.number().int().optional(),
-  smtpUser: z.string().optional(),
+  name: z.string().trim().min(2).optional(),
+  smtpHost: txt.optional(),
+  smtpPort: z.coerce.number().int().min(1).max(65535).optional(),
+  smtpUser: txt.optional(),
   smtpPass: z.string().optional(),
-  emailFrom: z.string().email().optional(),
+  // vazio = usa o próprio usuário do SMTP como remetente
+  emailFrom: z.union([z.literal(''), z.string().trim().email('Remetente: informe um e-mail válido.')]).optional(),
   emailSignature: z.string().optional(),
   whatsappPhoneId: z.string().optional(),
   whatsappToken: z.string().optional(),
@@ -88,12 +90,12 @@ export class SettingsController {
     return this.prisma.tenant.update({
       where: { id: u.tenantId },
       data: {
-        name: s.name, smtpHost: s.smtpHost, smtpPort: s.smtpPort, smtpUser: s.smtpUser,
+        name: s.name, smtpHost: s.smtpHost === undefined ? undefined : s.smtpHost || null, smtpPort: s.smtpPort, smtpUser: s.smtpUser === undefined ? undefined : s.smtpUser || null,
         smtpPassEnc: s.smtpPass ? this.vault.sealString(s.smtpPass) : undefined,
-        emailFrom: s.emailFrom, emailSignature: s.emailSignature, whatsappPhoneId: s.whatsappPhoneId,
+        emailFrom: s.emailFrom === undefined ? undefined : s.emailFrom || null, emailSignature: s.emailSignature, whatsappPhoneId: s.whatsappPhoneId,
         whatsappTokenEnc: s.whatsappToken ? this.vault.sealString(s.whatsappToken) : undefined,
       },
-      select: { id: true, name: true, smtpHost: true, emailFrom: true, whatsappPhoneId: true },
+      select: { id: true, name: true, smtpHost: true, smtpPort: true, smtpUser: true, emailFrom: true, whatsappPhoneId: true },
     });
   }
 

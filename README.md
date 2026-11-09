@@ -28,6 +28,8 @@ Passo a passo para quem não é desenvolvedor: **[COMECE-AQUI.md](COMECE-AQUI.md
 
 O **modo sandbox** (`INTEGRATIONS_MODE=sandbox`) simula SERPRO Integra Contador, SEFAZ DistDFe, NFS-e Nacional, WhatsApp, e-mail, push, consulta de CNPJ e IA. O sistema inteiro funciona sem nenhuma credencial; tudo o que "sairia" para fora vai para uma caixa de saída visível em **Configurações → Sandbox**.
 
+**Atualização segura (Mac):** `atualizar.sh` faz backup (`scripts/backup.sh` → `~/.produtiva/backups`), troca os arquivos e move para `~/.produtiva/arquivos-removidos` tudo o que não está no `.manifesto` da versão (`scripts/limpar.sh`), e religa sem recarregar a demonstração. `restaurar.sh` volta um backup. A base de demonstração só entra uma vez por computador e só com o sistema vazio.
+
 **Exceção — e-mail:** quando o SMTP do escritório está preenchido e salvo (servidor + usuário + senha), o e-mail **sai de verdade** mesmo no modo sandbox (e uma cópia fica na caixa Sandbox). Hostinger: `smtp.hostinger.com`, porta `465`, usuário = e-mail completo, remetente = o mesmo e-mail. O botão **Salvar e testar** conecta e autentica no servidor e mostra o motivo exato quando falha (senha, porta, remetente, servidor).
 
 ```bash

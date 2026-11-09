@@ -27,8 +27,10 @@ done
 
 # Segredos gerados uma vez por computador e guardados também em ~/.produtiva
 # (assim uma pasta nova/atualizada continua lendo os mesmos dados)
+# A cópia em ~/.produtiva é a oficial: qualquer pasta (nova, atualizada ou duplicada) usa sempre as mesmas chaves,
+# senão senhas salvas (e-mail, certificados) deixam de abrir e todo mundo é deslogado.
 mkdir -p "$HOME/.produtiva"
-if [ ! -f .env.local-docker ] && [ -f "$HOME/.produtiva/env-local-docker" ]; then
+if [ -f "$HOME/.produtiva/env-local-docker" ] && ! cmp -s "$HOME/.produtiva/env-local-docker" .env.local-docker 2>/dev/null; then
   cp "$HOME/.produtiva/env-local-docker" .env.local-docker
 fi
 if [ ! -f .env.local-docker ]; then
@@ -38,6 +40,12 @@ if [ ! -f .env.local-docker ]; then
 fi
 [ -f "$HOME/.produtiva/env-local-docker" ] || cp .env.local-docker "$HOME/.produtiva/env-local-docker"
 chmod 600 .env.local-docker "$HOME/.produtiva/env-local-docker" 2>/dev/null || true
+
+# Arruma a pasta: tira cópias duplicadas e sobras de versões antigas (vão para ~/.produtiva/arquivos-removidos)
+bash scripts/limpar.sh || true
+
+# Backup automático do banco antes de subir (as migrações nunca apagam dados, mas por garantia)
+if [ -z "${PRODUTIVA_BACKUP_FEITO:-}" ]; then bash scripts/backup.sh || echo "⚠️  Backup não foi feito (o sistema sobe mesmo assim)."; fi
 
 echo "🏗️  Construindo e subindo (a primeira vez leva de 5 a 15 minutos — não feche o Terminal)..."
 $C up -d --build || falhou "O Docker não conseguiu construir ou subir os serviços (veja as mensagens acima)."
@@ -57,9 +65,10 @@ espera http://localhost:3333/health "a API" 200 || falhou "A API não respondeu 
 espera http://localhost:3000/login "o painel" 60 || falhou "O painel (porta 3000) não respondeu."
 espera http://localhost:8081/ "o app do cliente" 40 || echo "⚠️  O app do cliente (8081) ainda não respondeu; o painel já pode ser usado."
 
-if [ "${1:-}" = "--demo" ]; then
-  echo "🧪 Conferindo base de demonstração e logo (não duplica nada)..."
-  $C --profile demo run --rm demo || echo "⚠️  Demonstração falhou (o sistema continua funcionando)."
+# Base de demonstração: só uma vez por computador e só se o sistema ainda estiver vazio (nunca mexe nos seus dados)
+if [ "${1:-}" = "--demo" ] && [ ! -f "$HOME/.produtiva/demo-carregada" ]; then
+  echo "🧪 Carregando base de demonstração (só na primeira vez)..."
+  $C --profile demo run --rm demo && touch "$HOME/.produtiva/demo-carregada" || echo "⚠️  Demonstração falhou (o sistema continua funcionando)."
 fi
 
 cat <<MSG
@@ -74,5 +83,6 @@ cat <<MSG
    App do cliente (web)  →  http://localhost:8081
 
    Parar: bash parar.sh     ·     Problemas: bash diagnostico.sh
+   Backups automáticos: ~/.produtiva/backups  (voltar: Restaurar Backup Produtiva.command)
 MSG
 command -v open >/dev/null 2>&1 && open http://localhost:3000 || true

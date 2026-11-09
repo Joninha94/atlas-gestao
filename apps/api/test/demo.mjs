@@ -34,8 +34,8 @@ if (!(await call('GET', '/settings/branding')).logoUrl) {
     console.log('logo do escritório configurada');
   }
 }
-if ((await call('GET', '/clients')).some((c) => c.legalName === 'Padaria Pão Dourado Ltda')) {
-  console.log('Base de demonstração já carregada.');
+if ((await call('GET', '/clients')).length > 0) {
+  console.log('O sistema já tem clientes: a base de demonstração não é carregada (seus dados ficam intactos).');
   process.exit(0);
 }
 const deps = Object.fromEntries((await call('GET', '/departments')).map((d) => [d.name, d.id]));

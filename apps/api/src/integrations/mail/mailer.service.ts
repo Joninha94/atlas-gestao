@@ -27,6 +27,13 @@ export class MailerService {
     return !!(t.smtpHost && t.smtpPassEnc);
   }
 
+  /** Abre a senha salva; se a chave do computador mudou, pede para digitar de novo em vez de dar erro genérico. */
+  private senha(enc: string) {
+    try { return this.vault.openString(enc); } catch {
+      throw Object.assign(new Error('A senha do e-mail salva não pode mais ser lida (as chaves do sistema mudaram). Digite a senha de novo e clique em Salvar.'), { code: 'EVAULT' });
+    }
+  }
+
   private transport(t: { smtpHost: string | null; smtpPort: number | null; smtpUser: string | null; smtpPassEnc: string | null }) {
     const port = t.smtpPort ?? 587;
     return nodemailer.createTransport({
@@ -34,7 +41,7 @@ export class MailerService {
       port,
       secure: port === 465, // 465 = SSL direto; 587/25 = STARTTLS
       requireTLS: port === 587,
-      auth: { user: (t.smtpUser ?? '').trim(), pass: this.vault.openString(t.smtpPassEnc!) },
+      auth: { user: (t.smtpUser ?? '').trim(), pass: this.senha(t.smtpPassEnc!) },
       connectionTimeout: 15_000, greetingTimeout: 10_000, socketTimeout: 30_000,
       tls: { servername: t.smtpHost!.trim() },
     });
@@ -87,6 +94,7 @@ export function smtpError(e: unknown, t: { smtpHost: string | null; smtpPort: nu
   const err = e as { code?: string; responseCode?: number; message?: string; response?: string };
   const msg = `${err.message ?? ''} ${err.response ?? ''}`.toLowerCase();
   const host = `${t.smtpHost}:${t.smtpPort ?? 587}`;
+  if (err.code === 'EVAULT') return err.message ?? 'Digite a senha do e-mail de novo e salve.';
   if (err.code === 'EAUTH' || err.responseCode === 535 || /auth|credentials|password/.test(msg)) {
     return `O servidor recusou o usuário ou a senha. Use o e-mail completo no Usuário (ex.: contato@seudominio.com.br) e a senha dessa caixa de e-mail${/hostinger/.test(t.smtpHost ?? '') ? ' (no hPanel da Hostinger: E-mails → Contas de e-mail → trocar senha, se precisar)' : ''}. No Gmail use uma "senha de app".`;
   }
