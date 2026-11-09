@@ -5,6 +5,11 @@ C="docker compose -f docker-compose.local.yml"
 {
   echo "=== $(date) · $(uname -a)"
   echo "=== docker"; docker version --format '{{.Server.Version}} ({{.Server.Arch}})' 2>&1; docker compose version 2>&1
+  echo "=== disco do docker"; docker system df 2>&1
+  echo "=== volumes"; docker volume ls 2>&1 | grep -i produtiva
+  echo "=== pasta"; ls -la 2>&1 | head -60
+  echo "=== backups"; ls -la "$HOME/.produtiva/backups" 2>&1 | tail -5
+  echo "=== construção (últimas linhas)"; docker compose -f docker-compose.local.yml build 2>&1 | tail -80
   echo "=== serviços"; $C ps -a 2>&1
   echo "=== portas"; for p in 3000 3333 8081; do echo "--- $p"; lsof -nP -iTCP:$p -sTCP:LISTEN 2>&1 | head -3; curl -s -o /dev/null -w "HTTP %{http_code}\n" "http://localhost:$p/" 2>&1; done
   echo "=== health"; curl -s http://localhost:3333/health 2>&1; echo

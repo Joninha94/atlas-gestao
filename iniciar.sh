@@ -48,7 +48,14 @@ bash scripts/limpar.sh || true
 if [ -z "${PRODUTIVA_BACKUP_FEITO:-}" ]; then bash scripts/backup.sh || echo "⚠️  Backup não foi feito (o sistema sobe mesmo assim)."; fi
 
 echo "🏗️  Construindo e subindo (a primeira vez leva de 5 a 15 minutos — não feche o Terminal)..."
-$C up -d --build || falhou "O Docker não conseguiu construir ou subir os serviços (veja as mensagens acima)."
+if ! $C up -d --build; then
+  # Causa mais comum depois de várias atualizações: disco do Docker cheio de versões antigas das imagens.
+  # Limpa só imagens antigas e cache de construção (os DADOS ficam nos volumes e não são tocados) e tenta de novo.
+  echo; echo "🧹 Falhou. Limpando versões antigas das imagens do Docker e tentando de novo (seus dados não são tocados)..."
+  docker builder prune -af >/dev/null 2>&1 || true
+  docker image prune -f >/dev/null 2>&1 || true
+  $C up -d --build || falhou "O Docker não conseguiu construir ou subir os serviços (veja as mensagens acima)."
+fi
 
 espera() { # $1 = url, $2 = nome, $3 = tentativas (x3 s)
   echo -n "⏳ Aguardando $2"
