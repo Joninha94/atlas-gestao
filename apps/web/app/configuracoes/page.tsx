@@ -37,10 +37,19 @@ function Configuracoes() {
   );
 }
 
+const SMTP_PRESETS = [
+  { name: 'Hostinger', host: 'smtp.hostinger.com', port: 465 },
+  { name: 'Gmail / Google Workspace', host: 'smtp.gmail.com', port: 587 },
+  { name: 'Outlook / Microsoft 365', host: 'smtp.office365.com', port: 587 },
+  { name: 'Locaweb', host: 'email-ssl.com.br', port: 465 },
+  { name: 'KingHost', host: 'smtp.kinghost.net', port: 587 },
+];
+
 function Escritorio() {
   const { data, reload } = useApi<any>('/settings');
   const [f, setF] = useState<any>(null);
   const [testTo, setTestTo] = useState('');
+  const [testRes, setTestRes] = useState<{ ok: boolean; msg: string } | null>(null);
   const [o, setO] = useState<any>(null);
   useEffect(() => { if (data && !o) setO({ cnpj: formatCnpj(data.cnpj), ...Object.fromEntries(Object.entries(data.office ?? {}).map(([k, v]) => [k, k === 'zipCode' && v ? String(v).replace(/^(\d{5})(\d{3})$/, '$1-$2') : k === 'accountantCpf' && v ? formatCpf(String(v)) : v ?? ''])) }); }, [data, o]);
   const { busy, run } = useAction();
@@ -59,7 +68,7 @@ function Escritorio() {
   const saveOffice = save;
   return (
     <div className="space-y-4">
-      {data.sandbox && <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"><b>Modo sandbox:</b> integrações externas (Receita, SEFAZ, WhatsApp, e-mail) estão simuladas. Mensagens vão para a caixa de saída de desenvolvimento.</div>}
+      {data.sandbox && <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"><b>Modo de teste:</b> integrações externas (Receita, SEFAZ, WhatsApp) estão simuladas. {data.smtpConfigured ? 'O e-mail sai de verdade pelo SMTP configurado abaixo (uma cópia fica na caixa Sandbox).' : 'Configure o e-mail de disparo abaixo para os e-mails saírem de verdade.'}</div>}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Escritório">
           <div className="space-y-3">
@@ -114,19 +123,37 @@ function Escritorio() {
             </div>
           </div>
         </Card>
-        <Card title="E-mail de disparo (SMTP)">
+        <Card title="E-mail de disparo (SMTP)" actions={data.smtpConfigured ? <Badge tone="green">Envio real ativo</Badge> : <Badge tone="amber">Não configurado</Badge>}>
           <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-ink-muted">Preencher com:</span>
+              {SMTP_PRESETS.map((pr) => (
+                <button key={pr.name} type="button" onClick={() => setF({ ...f, smtpHost: pr.host, smtpPort: pr.port })} className={`rounded-full border px-2.5 py-1 transition hover:border-brand-400 ${f.smtpHost === pr.host ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-slate-300'}`}>{pr.name}</button>
+              ))}
+            </div>
             <div className="grid grid-cols-3 gap-3">
-              <Field label="Servidor"><input className="input" value={f.smtpHost} onChange={(e) => setF({ ...f, smtpHost: e.target.value })} placeholder="smtp.seudominio.com.br" /></Field>
-              <Field label="Porta"><input className="input" value={f.smtpPort} onChange={(e) => setF({ ...f, smtpPort: e.target.value })} /></Field>
-              <Field label="Usuário"><input className="input" value={f.smtpUser} onChange={(e) => setF({ ...f, smtpUser: e.target.value })} /></Field>
+              <Field label="Servidor"><input className="input" value={f.smtpHost} onChange={(e) => setF({ ...f, smtpHost: e.target.value })} placeholder="smtp.hostinger.com" /></Field>
+              <Field label="Porta" hint="465 = SSL · 587 = STARTTLS"><input className="input" value={f.smtpPort} onChange={(e) => setF({ ...f, smtpPort: e.target.value })} /></Field>
+              <Field label="Usuário" hint="E-mail completo"><input className="input" value={f.smtpUser} onChange={(e) => setF({ ...f, smtpUser: e.target.value, emailFrom: !f.emailFrom || f.emailFrom === f.smtpUser ? e.target.value : f.emailFrom })} placeholder="contato@seudominio.com.br" /></Field>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Senha" hint={data.smtpConfigured ? 'Já configurada — preencha só para trocar.' : undefined}><input type="password" className="input" value={f.smtpPass} onChange={(e) => setF({ ...f, smtpPass: e.target.value })} /></Field>
-              <Field label="Remetente"><input className="input" value={f.emailFrom} onChange={(e) => setF({ ...f, emailFrom: e.target.value })} placeholder="fiscal@produtiva.com.br" /></Field>
+              <Field label="Senha" hint={data.smtpConfigured ? 'Já configurada — preencha só para trocar.' : 'Senha da caixa de e-mail'}><input type="password" className="input" value={f.smtpPass} onChange={(e) => setF({ ...f, smtpPass: e.target.value })} /></Field>
+              <Field label="Remetente" hint="Igual ao Usuário"><input className="input" value={f.emailFrom} onChange={(e) => setF({ ...f, emailFrom: e.target.value })} placeholder="contato@seudominio.com.br" /></Field>
             </div>
             <Field label="Assinatura (HTML)"><textarea className="input" rows={2} value={f.emailSignature} onChange={(e) => setF({ ...f, emailSignature: e.target.value })} /></Field>
-            <div className="flex items-end gap-2"><Field label="Enviar e-mail de teste para"><input className="input" value={testTo} onChange={(e) => setTestTo(e.target.value)} /></Field><Button variant="secondary" disabled={!testTo || busy} onClick={() => run(async () => { const r = await apiPost('/settings/test-email', { to: testTo }); if (r.ok === false) throw new Error(r.error); }, 'E-mail de teste enviado.')}><Mail size={14} /> Testar</Button></div>
+            <div className="flex items-end gap-2">
+              <Field label="Enviar e-mail de teste para"><input className="input" type="email" value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="seu@email.com" /></Field>
+              <Button variant="secondary" disabled={!testTo || busy} onClick={() => run(async () => {
+                setTestRes(null);
+                // salva o que está na tela antes de testar (senão testaria a configuração antiga)
+                await apiPut('/settings/dispatch', { ...f, smtpPort: Number(f.smtpPort) || undefined, smtpPass: f.smtpPass || undefined, whatsappToken: f.whatsappToken || undefined, emailFrom: f.emailFrom || undefined });
+                const r = await apiPost('/settings/test-email', { to: testTo });
+                if (r.ok === false) { setTestRes({ ok: false, msg: r.error }); reload(); throw new Error('O e-mail de teste não foi enviado.'); }
+                setTestRes({ ok: true, msg: `Enviado para ${r.sentTo ?? testTo}. Confira a caixa de entrada (e o spam).` });
+                reload();
+              }, 'E-mail de teste enviado.')}><Mail size={14} /> Salvar e testar</Button>
+            </div>
+            {testRes && <div className={`rounded-md border px-3 py-2 text-sm ${testRes.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'}`}>{testRes.msg}</div>}
           </div>
         </Card>
         <Card title="WhatsApp de disparo (API oficial da Meta)">

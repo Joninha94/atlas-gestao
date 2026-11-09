@@ -28,6 +28,8 @@ Passo a passo para quem não é desenvolvedor: **[COMECE-AQUI.md](COMECE-AQUI.md
 
 O **modo sandbox** (`INTEGRATIONS_MODE=sandbox`) simula SERPRO Integra Contador, SEFAZ DistDFe, NFS-e Nacional, WhatsApp, e-mail, push, consulta de CNPJ e IA. O sistema inteiro funciona sem nenhuma credencial; tudo o que "sairia" para fora vai para uma caixa de saída visível em **Configurações → Sandbox**.
 
+**Exceção — e-mail:** quando o SMTP do escritório está preenchido e salvo (servidor + usuário + senha), o e-mail **sai de verdade** mesmo no modo sandbox (e uma cópia fica na caixa Sandbox). Hostinger: `smtp.hostinger.com`, porta `465`, usuário = e-mail completo, remetente = o mesmo e-mail. O botão **Salvar e testar** conecta e autentica no servidor e mostra o motivo exato quando falha (senha, porta, remetente, servidor).
+
 ```bash
 cp .env.example apps/api/.env.local     # preencha VAULT_MASTER_KEY (openssl rand -hex 32) e JWT_SECRET
 docker compose up -d                    # Postgres 16, Redis, MinIO, LiveKit

@@ -143,10 +143,15 @@ export class SettingsController {
   @Post('settings/test-email')
   @RequirePermission(PERMISSIONS.SETTINGS)
   async testEmail(@CurrentUser() u: AuthUser, @Body() b: { to: string }) {
+    if (!b?.to || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(b.to.trim())) return { ok: false, error: 'Informe um e-mail válido para receber o teste.' };
     const check = await this.mailer.verify(u.tenantId);
     if (!check.ok) return check;
-    await this.mailer.sendForTenant(u.tenantId, { to: b.to, subject: 'Teste de envio — Produtiva Gestão', html: '<p>Configuração de e-mail funcionando.</p>' });
-    return { ok: true };
+    try {
+      await this.mailer.sendForTenant(u.tenantId, { to: b.to.trim(), subject: 'Teste de envio — Produtiva Gestão', html: '<p>Olá!</p><p>Este é um e-mail de teste do Produtiva Gestão. Se chegou, o envio das tarefas para os clientes está funcionando.</p>' });
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+    return { ok: true, sentTo: b.to.trim() };
   }
 
   /** Certificado digital do escritório (usado com as procurações dos clientes no Monitor). */
