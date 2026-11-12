@@ -1,0 +1,110 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Poppins:wght@400;600;700&display=swap');
+
+/* ── Reset & Base ────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html  { height: 100%; font-size: 16px; }
+body  { min-height: 100%; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
+#root { min-height: 100%; }
+
+/* ── Typography ─────────────────────────────────────────────────────────── */
+body { font-family: 'Geist', 'Inter', system-ui, -apple-system, sans-serif; }
+.ff-display { font-family: 'Fraunces', Georgia, serif; font-feature-settings: "kern" 1; }
+.ff-brand   { font-family: 'Poppins', 'Inter', system-ui, sans-serif; }
+.ff-mono    { font-family: 'SF Mono', 'Fira Code', 'Roboto Mono', monospace; }
+input, select, button, textarea { font-family: inherit; }
+
+/* ── Color & Text utilities ─────────────────────────────────────────────── */
+.num { font-family: 'Fraunces', Georgia, serif; font-weight: 600; letter-spacing: -0.02em; }
+
+/* ── Placeholder ────────────────────────────────────────────────────────── */
+::placeholder { color: #4E6578; opacity: 0.65; }
+
+/* ── Text selection ─────────────────────────────────────────────────────── */
+::selection { background: rgba(224,191,76,0.2); color: #E4EAF4; }
+
+/* ── Scrollbar — ultra thin ─────────────────────────────────────────────── */
+::-webkit-scrollbar       { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(28, 45, 62, 0.8); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #253d52; }
+.scrollbar-thin::-webkit-scrollbar       { width: 3px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(28,45,62,0.8); border-radius: 99px; }
+
+/* ── Focus ring — gold glow ─────────────────────────────────────────────── */
+:focus-visible { outline: none; box-shadow: 0 0 0 2px #070A12, 0 0 0 4px #E0BF4C; }
+
+/* ── Global transitions ─────────────────────────────────────────────────── */
+button { transition: background 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s, transform 0.1s; }
+a      { transition: color 0.12s, opacity 0.12s; }
+
+/* ── Card system ────────────────────────────────────────────────────────── */
+.card {
+  background: #0D1117;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.05);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.03);
+}
+.card-hover {
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+}
+.card-hover:hover {
+  border-color: rgba(224,191,76,0.3) !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 0 1px rgba(224,191,76,0.15) !important;
+  transform: translateY(-1px);
+}
+
+/* ── Row hover ──────────────────────────────────────────────────────────── */
+.row-hover { transition: background 0.1s; }
+.row-hover:hover { background: rgba(19,26,35,0.9) !important; }
+
+/* ── Input focus ────────────────────────────────────────────────────────── */
+.input-field:focus {
+  border-color: rgba(224,191,76,0.5) !important;
+  box-shadow: 0 0 0 3px rgba(224,191,76,0.08) !important;
+}
+
+/* ── Animations ─────────────────────────────────────────────────────────── */
+@keyframes fadeUp      { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn      { from { opacity: 0; }                              to { opacity: 1; } }
+@keyframes scaleIn     { from { opacity: 0; transform: scale(0.96); }      to { opacity: 1; transform: none; } }
+@keyframes flow        { 0% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: -40; } }
+@keyframes spin        { to { transform: rotate(360deg); } }
+@keyframes floatY      { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes pulseGold   { 0%,100% { box-shadow: 0 0 0 0 rgba(224,191,76,0); } 50% { box-shadow: 0 0 32px 8px rgba(224,191,76,0.12); } }
+@keyframes shimmer     { from { background-position: -200% center; } to { background-position: 200% center; } }
+
+.fade-up    { animation: fadeUp  0.3s cubic-bezier(0.16,1,0.3,1); }
+.fade-in    { animation: fadeIn  0.18s ease; }
+.scale-in   { animation: scaleIn 0.25s cubic-bezier(0.16,1,0.3,1); }
+.flow-line  { stroke-dasharray: 6 8; animation: flow 1.8s linear infinite; }
+.spin-icon  { animation: spin 1s linear infinite; }
+.float-y    { animation: floatY 4s ease-in-out infinite; }
+.pulse-gold { animation: pulseGold 2.5s ease-in-out infinite; }
+.tab-btn    { transition: color 0.15s, border-color 0.15s; }
+
+/* ── Glass surface ───────────────────────────────────────────────────────── */
+.glass {
+  background: rgba(11,16,28,0.72);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,0.06);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+
+/* ── Mesh grid background ────────────────────────────────────────────────── */
+.mesh-bg {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.016) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.016) 1px, transparent 1px);
+  background-size: 52px 52px;
+}
+
+/* ── Gold shimmer text ───────────────────────────────────────────────────── */
+.shimmer-gold {
+  background: linear-gradient(90deg, #C9A227 0%, #E0BF4C 40%, #F5D876 60%, #C9A227 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: shimmer 3s linear infinite;
+}

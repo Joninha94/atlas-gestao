@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 230" width="860" height="230">
+  <title>Atlas Gestão — Logo horizontal</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&amp;display=swap');
+    .atlas   { font-family:'Poppins', Arial, sans-serif; font-weight:700; fill:#0B2545; }
+    .gestao  { font-family:'Poppins', Arial, sans-serif; font-weight:400; fill:#C9A227; }
+  </style>
+
+  <!-- icon -->
+  <rect x="34"  y="132" width="42" height="64"  rx="9" fill="#0B2545"/>
+  <rect x="94"  y="100" width="42" height="96"  rx="9" fill="#0B2545"/>
+  <rect x="154" y="56"  width="42" height="140" rx="9" fill="#0B2545"/>
+  <circle cx="175" cy="34" r="21" fill="#C9A227"/>
+
+  <!-- wordmark -->
+  <text x="235" y="150" font-size="86" class="atlas">Atlas<tspan class="gestao" dx="14">Gestão</tspan></text>
+</svg>

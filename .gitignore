@@ -7,3 +7,4 @@ dist-ssr/
 .mcp.json
 *.log
 .DS_Store
+.claude/settings.local.json
